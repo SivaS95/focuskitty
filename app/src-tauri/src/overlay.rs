@@ -40,7 +40,45 @@ pub fn make_overlay(window: &tauri::WebviewWindow) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows: keep the cat out of Alt+Tab, and stop it ever taking focus.
+///
+/// `alwaysOnTop` and `skipTaskbar` get most of the way, but two things they do
+/// not do would each break something real:
+///
+/// * **Alt+Tab.** `skipTaskbar` removes the taskbar button and nothing else, so
+///   the cat would sit in the switcher as though it were an application you
+///   might want to work in. `WS_EX_TOOLWINDOW` removes it from both.
+///
+/// * **Focus.** Clicking the cat opens the quick controls -- and a click on an
+///   ordinary window ACTIVATES it. FocusKitty would become the foreground
+///   window, so the probe would answer "you are using FocusKitty", the timer
+///   for whatever you were actually doing would stop, and a close arriving in
+///   that moment would refuse because the browser was no longer in front.
+///   `WS_EX_NOACTIVATE` lets the click land without the window ever coming
+///   forward, which is what `acceptFirstMouse` plus an accessory activation
+///   policy buys on macOS.
+#[cfg(target_os = "windows")]
+pub fn make_overlay(window: &tauri::WebviewWindow) -> anyhow::Result<()> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    };
+
+    let raw = window.hwnd().map_err(|e| anyhow::anyhow!("no hwnd: {e}"))?;
+    // Rebuilt from the raw pointer on purpose: Tauri and this crate need not
+    // agree on which windows-rs version's HWND they mean, and the two types
+    // are unrelated as far as the compiler is concerned.
+    let hwnd = HWND(raw.0 as *mut std::ffi::c_void);
+
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let want = ex | WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize;
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, want);
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn make_overlay(_window: &tauri::WebviewWindow) -> anyhow::Result<()> {
     Ok(())
 }

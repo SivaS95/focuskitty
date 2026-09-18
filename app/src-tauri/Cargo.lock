@@ -1087,6 +1087,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tracing",
  "tracing-subscriber",
+ "windows 0.61.3",
 ]
 
 [[package]]

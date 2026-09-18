@@ -37,6 +37,7 @@ objc2-foundation = { version = "0.3", features = ["NSGeometry"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 fk-probe-windows = { path = "../../crates/fk-probe-windows" }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
 [profile.release]
 codegen-units = 1
