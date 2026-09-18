@@ -65,6 +65,10 @@ fn with_probe<R>(f: impl FnOnce(&dyn ActivityProbe) -> R) -> Option<R> {
             {
                 *slot = Some(Box::new(fk_probe_android::AndroidProbe::new()));
             }
+            #[cfg(target_os = "windows")]
+            {
+                *slot = Some(Box::new(fk_probe_windows::WinProbe::new()));
+            }
         }
         slot.as_deref().map(f)
     })

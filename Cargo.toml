@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/fk-core", "crates/fk-probe-macos", "crates/fk-cli"]
+members = [
+    "crates/fk-core",
+    "crates/fk-probe-macos",
+    "crates/fk-probe-windows",
+    "crates/fk-cli",
+]
 
 [workspace.package]
 version = "0.1.0"

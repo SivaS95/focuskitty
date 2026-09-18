@@ -35,9 +35,13 @@ fn probe() -> impl ActivityProbe {
     {
         fk_probe_macos::MacProbe::new()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
-        compile_error!("phase 1 implements macOS only; the Windows probe is phase 6")
+        fk_probe_windows::WinProbe::new()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        compile_error!("no probe for this platform")
     }
 }
 

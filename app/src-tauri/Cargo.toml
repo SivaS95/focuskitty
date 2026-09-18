@@ -35,6 +35,9 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSResponder", "NSView", "NSApplication"] }
 objc2-foundation = { version = "0.3", features = ["NSGeometry"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+fk-probe-windows = { path = "../../crates/fk-probe-windows" }
+
 [profile.release]
 codegen-units = 1
 lto = true
