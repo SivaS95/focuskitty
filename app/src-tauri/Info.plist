@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Without this key the Automation prompt never appears and every
+       AppleScript call is silently denied. -->
+  <key>NSAppleEventsUsageDescription</key>
+  <string>FocusKitty reads the address of the tab in front of you so it can count your time on it, and close that tab when the limit is up.</string>
+
+  <!-- A background agent: no Dock icon, no app-switcher entry. -->
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>

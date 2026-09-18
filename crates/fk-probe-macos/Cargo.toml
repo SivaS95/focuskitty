@@ -1,0 +1,19 @@
+[package]
+name = "fk-probe-macos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+fk-core = { path = "../fk-core" }
+anyhow.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+osakit = "0.3"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSURL"] }
+objc2-app-kit = { version = "0.3", features = [
+    "NSWorkspace",
+    "NSRunningApplication",
+    "NSApplication",
+] }

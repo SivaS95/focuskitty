@@ -1,0 +1,29 @@
+# --- secrets ---------------------------------------------------------------
+# The Android signing password. Android accepts an update only if it is signed
+# with the same key, so this and the key it points at are unrecreatable -- and
+# they must never be the kind of thing a public clone hands out.
+keystore.properties
+*.jks
+*.keystore
+*.p12
+.env
+.env.*
+
+# --- build output ----------------------------------------------------------
+target/
+node_modules/
+*.log
+.DS_Store
+
+# Android. The gen/android tree is SOURCE -- the overlay Service, the manifest,
+# the gradle config and the proguard rules are all hand-written and must be
+# committed. Only its build products are excluded.
+app/src-tauri/gen/android/.gradle/
+app/src-tauri/gen/android/build/
+app/src-tauri/gen/android/app/build/
+app/src-tauri/gen/android/local.properties
+app/src-tauri/gen/android/.cxx/
+app/src-tauri/gen/android/app/src/main/jniLibs/
+
+# NOTE: app/dist is NOT ignored. Tauri compiles it into the binary
+# (frontendDist: "../dist"), so a clone without it builds an empty app.

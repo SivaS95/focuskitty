@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FocusKitty</title>
+<link rel="stylesheet" href="cat.css">
+<style>
+  /* The window is a transparent rectangle; only the cat may be seen or hit. */
+  html, body {
+    margin: 0; height: 100%;
+    background: transparent;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  /* Room around the animal: the sleep pose drops the body and the walk cycle
+     lifts it, and a window sized tight to the sitting pose clips both. */
+  #m { position: absolute; inset: 0 0 26px 0; }
+  .stage { height: 100%; }
+  .cat-root { margin-left: -140px; }
+</style>
+</head>
+<body>
+<div id="m"></div>
+<script type="module">
+import { Cat } from "./cat.js";
+
+const invoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
+const listen = (ev, fn) => window.__TAURI__.event.listen(ev, fn);
+
+// Say once, out loud, whether each event stream is actually arriving.
+const seen = new Set();
+const once = (what) => {
+  if (seen.has(what)) return;
+  seen.add(what);
+  invoke("debug_ping", { msg: what });
+};
+invoke("debug_ping", {
+  msg: `page up · TAURI=${!!window.__TAURI__} listen=${typeof window.__TAURI__?.event?.listen}`,
+});
+addEventListener("error", (e) => invoke("debug_ping", { msg: "JS ERROR: " + e.message }));
+
+const mount = document.getElementById("m");
+const cat = new Cat(mount, { coat: "cream", pose: "sit" });
+
+// A pose chosen by hand wins briefly, so the 1 Hz snapshot does not yank the
+// cat back mid-gesture.
+let manual = null, manualUntil = 0;
+
+// Tell the host where the drawn cat actually is. A click-through window never
+// delivers mousemove to the page, so the page cannot hit-test itself -- Rust
+// polls the global cursor against this box instead.
+function reportHitBox() {
+  const svg = mount.querySelector(".cat-svg");
+  if (!svg) return;
+  const r = svg.getBoundingClientRect();
+  // Tighten to the animal: the SVG box has a lot of empty air around it.
+  const pad = { l: 0.30, r: 0.22, t: 0.14, b: 0.04 };
+  invoke("set_hit_box", {
+    x: r.left + r.width * pad.l,
+    y: r.top + r.height * pad.t,
+    w: r.width * (1 - pad.l - pad.r),
+    h: r.height * (1 - pad.t - pad.b),
+  });
+}
+addEventListener("resize", reportHitBox);
+setTimeout(reportHitBox, 120);
+
+// Drag moves the WINDOW; a click opens the compact controls.
+cat.enableDrag({
+  external: true,
+  onMove: () => invoke("begin_drag"),
+  // A click is affection, nothing more. Opening a control panel every time you
+  // pet the cat is not what petting a cat should do.
+  onClick: () => {
+    cat.setPose("pat");
+    cat.say("mrrp", 1500);
+    manualUntil = Date.now() + 2500;   // brief hold, then the app resumes
+  },
+});
+
+// Right-click is the shortcut to the controls, and they open BESIDE the cat.
+addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  invoke("cat_clicked");
+});
+
+// Gaze. The cursor arrives from Rust because the page cannot see it.
+listen("fk://cursor", (e) => {
+  once("cursor events arriving");
+  const [rx, ry] = e.payload;
+  const svg = mount.querySelector(".cat-svg");
+  if (!svg) return;
+  const r = svg.getBoundingClientRect();
+  // Head sits at viewBox (190, 94) of a 280x210 box -- mirrored when the cat
+  // has turned around, so measure from wherever the head actually is.
+  const headFrac = cat.dir > 0 ? (190 / 280) : (90 / 280);
+  const hx = r.left + r.width * headFrac;
+  const hy = r.top + r.height * (94 / 210);
+  // Screen space: the cat decides for itself whether to turn round.
+  cat.lookAtScreen((rx - hx) / 190, (ry - hy) / 150);
+});
+
+// Poses the app drives; anything else from the popover is a one-off action.
+const POSES = new Set(["sit","walk","sleep","pat","greet","bored","angry","confront","held","leap","land","eat","read"]);
+listen("fk://do", (e) => {
+  once("do events arriving");
+  const a = e.payload;
+  if (POSES.has(a)) { manual = a; cat.setPose(a); }
+  else if (typeof cat[a] === "function") cat[a]();
+});
+
+const MANUAL_HOLD = 12000;
+
+// Face into the screen: parked at the right edge, look left across the desktop.
+// While the cat is off doing something deliberate, its own idle facing logic
+// must not fight the direction it is being sent in.
+let busy = false;
+listen("fk://busy", (e) => { busy = !!e.payload; });
+listen("fk://face", (e) => {
+  const want = e.payload;
+  if (want !== cat.dir) cat.turnAround();
+});
+
+listen("fk://place", (e) => {
+  once("place events arriving");
+  if (!busy) cat.faceInward(e.payload);
+});
+
+let lastSay = null;
+listen("fk://snapshot", (e) => {
+  once("snapshot events arriving");
+  const s = e.payload;
+
+  if (manual) { manualUntil = Date.now() + MANUAL_HOLD; manual = null; }
+  const held = Date.now() < manualUntil;
+
+  if (!held && s.pose && s.pose !== cat.poseName && !cat.dragging) cat.setPose(s.pose);
+
+  if (s.say && s.say !== lastSay) { lastSay = s.say; cat.say(s.say, 5200); }
+  if (!s.say) lastSay = null;
+});
+</script>
+</body>
+</html>

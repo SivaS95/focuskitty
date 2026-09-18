@@ -1,0 +1,39 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>solo</title>
+<link rel="stylesheet" href="cat.css">
+<style>
+ body{margin:0;background:#f4f6fa;height:100vh;display:grid;place-items:center}
+ #m{width:420px}
+</style></head><body><div id="m"></div>
+<script type="module">
+import { Cat } from "./cat.js";
+const q = new URLSearchParams(location.search);
+const cat = new Cat(document.getElementById("m"),
+  { coat: q.get("coat") || "cream", pose: q.get("pose") || "sit" });
+
+if (q.get("say")) cat.say(q.get("say"), 0);
+if (q.get("face") === "left") { cat.dir = -1; cat.facingScale = -1; }
+
+// ?look=x,y pins the gaze. Re-applied every step because the rig decays toward
+// its own idle wandering the moment the pointer goes quiet.
+let hold = null;
+if (q.get("look")) {
+  const [lx, ly] = q.get("look").split(",").map(Number);
+  hold = () => cat.lookAt(lx, ly);
+  hold();
+  setInterval(hold, 50);
+}
+
+// ?t=<seconds> freezes the browser clock and steps the rig by hand, so a
+// screenshot lands on an exact moment of a timed action every time.
+if (q.get("t") !== null) {
+  cat.paused = true;
+  for (let i = 0; i < 40; i++) { hold?.(); cat.step(1 / 60); }   // settle
+  if (q.get("do")) cat[q.get("do")]();
+  const frames = Math.round(parseFloat(q.get("t")) * 60);
+  for (let i = 0; i < frames; i++) { hold?.(); cat.step(1 / 60); }
+} else if (q.get("do")) {
+  setTimeout(() => cat[q.get("do")](), 200);
+}
+globalThis.cat = cat;
+</script></body></html>

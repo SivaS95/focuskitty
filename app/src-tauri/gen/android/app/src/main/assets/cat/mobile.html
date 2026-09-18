@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>FocusKitty</title>
+<link rel="stylesheet" href="cat.css">
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  body { font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+  /* The cat is deliberately small. On a phone anything that covers content is
+     a nuisance, so it sits in a corner and only grows when tapped. */
+  #catWrap { position: absolute; right: 0; bottom: 0; width: 104px; height: 104px; }
+
+  /* The scale lives on a PARENT, never on .cat-root.
+     The rig rewrites .cat-root's transform every frame (that is how the cat
+     walks), so any scale put there is wiped on the next tick -- which is why
+     the cat rendered at full size and got cropped by its own window.
+     280 units of art into 104px = 0.371. */
+  #scaler {
+    position: absolute; left: 50%; bottom: 0;
+    width: 280px; height: 210px; margin-left: -140px;
+    transform: scale(.371); transform-origin: 50% 100%;
+  }
+  #scaler .stage { height: 210px; }
+
+  /* What the cat says. Sits above it, and only exists while it is speaking:
+     the window is only this big for those few seconds. */
+  #bubble {
+    position: absolute; right: 88px; bottom: 74px; max-width: 150px;
+    display: none; padding: 7px 9px; box-sizing: border-box;
+    background: rgba(24,26,31,.96); color: #e9ecf3; border-radius: 11px;
+    font-size: 11.5px; line-height: 1.3; box-shadow: 0 8px 22px rgba(0,0,0,.45);
+  }
+  #bubble::after {
+    content: ""; position: absolute; right: -5px; bottom: 9px;
+    border: 5px solid transparent; border-left-color: rgba(24,26,31,.96);
+    border-right: 0;
+  }
+  body.saying:not(.open) #bubble { display: block; }
+
+  /* Tools, shown only when expanded. */
+  #tools {
+    position: absolute; inset: 0 104px 0 0;
+    display: none; flex-direction: column; gap: 6px;
+    padding: 10px; box-sizing: border-box;
+    background: rgba(24,26,31,.96); border-radius: 16px;
+    color: #e9ecf3; box-shadow: 0 10px 30px rgba(0,0,0,.45);
+  }
+  body.open #tools { display: flex; }
+  body.open #catWrap { right: 0; }
+
+  #tools h1 { margin: 0 0 2px; font-size: 12px; font-weight: 650; letter-spacing: .02em; }
+  #tools .now { font-size: 11px; color: #8b93a3; margin-bottom: 4px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #tools button {
+    font: inherit; font-size: 12.5px; color: inherit; text-align: left;
+    background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.1);
+    border-radius: 9px; padding: 8px 10px;
+  }
+  #tools button.primary { background: #3b6fe0; border-color: #3b6fe0; }
+  #tools button { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #tools .now { max-width: 100%; }
+  #tools .row { display: flex; gap: 6px; }
+  #tools .row button { flex: 1; text-align: center; }
+  #tools .mins { flex: 0 0 56px; font-variant-numeric: tabular-nums; }
+  #tools button:disabled { opacity: .5; }
+  #status { background: rgba(255,255,255,.06); border-radius: 10px; padding: 8px 10px; }
+  #status .statTop { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; }
+  #status .statTop span:first-child { font-weight: 600; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  #status #statLeft { margin-left: auto; font-variant-numeric: tabular-nums;
+    color: #9db8ff; font-weight: 650; white-space: nowrap; }
+  #status #statLeft.gone { color: #ff8577; }
+  #status .bar { height: 4px; border-radius: 2px; background: rgba(255,255,255,.12);
+    margin-top: 6px; overflow: hidden; }
+  #status .bar i { display: block; height: 100%; width: 0;
+    background: linear-gradient(90deg,#5b8cff,#8f7bff); }
+  #status .bar i.over { background: linear-gradient(90deg,#ff7a6b,#ff4d6d); }
+  #status .statSub { font-size: 11px; color: #7d8494; margin-top: 4px; }
+  .stepper button { flex: 1; }
+  .stepper .mins { flex: 1.4; }
+</style>
+</head>
+<body>
+  <div id="tools">
+    <h1>FocusKitty</h1>
+    <div class="now" id="now">watching your apps</div>
+    <!-- Shown once the app in front is being watched. -->
+    <div id="status" hidden>
+      <div class="statTop"><span id="statName"></span><span id="statLeft"></span></div>
+      <div class="bar"><i id="statBar"></i></div>
+      <div class="statSub" id="statSub"></div>
+    </div>
+
+    <button class="primary" id="watch">+ Watch this app</button>
+
+
+    <div class="row stepper">
+      <button id="minus">−</button>
+      <button id="mins" class="mins">20m</button>
+      <button id="plus">+</button>
+    </div>
+    <div class="row">
+      <!-- Shares the row rather than taking a slot of its own: the panel is
+           312dp on a phone and every line it grows covers more of your app. -->
+      <button id="stop" hidden>Stop</button>
+      <button id="sleep">Sleep</button>
+      <button id="hide">Hide</button>
+    </div>
+    <button id="open">Open FocusKitty…</button>
+  </div>
+  <div id="bubble"></div>
+  <div id="catWrap"><div id="scaler"><div id="m"></div></div></div>
+
+<!-- One classic script: a WebView refuses ES modules over file:// -->
+<script src="bundle.js"></script>
+<script>
+const cat = new Cat(document.getElementById("m"), { coat: "cream", pose: "sit" });
+
+// Kotlin drives this when the window grows or shrinks.
+const FKB = window.FK;   // the Kotlin bridge
+
+let target = { id: "", label: "" };
+const MINS = [5, 10, 20, 30, 60];
+let minsIdx = 2;
+
+/** Whatever the tracker last published. */
+function snapshot() {
+  try { return JSON.parse(FKB?.status?.() || "null"); } catch (e) { return null; }
+}
+
+function readTarget() {
+  const raw = FKB?.currentApp?.() || "";
+  const [id, label] = raw.split("\u001f");
+  target = { id: id || "", label: label || "" };
+  render();
+}
+
+/**
+ * A button that does not change when pressed is broken. Once the app in front
+ * is being watched, the primary action becomes its live countdown instead.
+ */
+function render() {
+  const snap = snapshot();
+  const row = snap?.rows?.find(
+    (r) => r.label.toLowerCase() === (target.label || "").toLowerCase()
+  );
+
+  const w = document.getElementById("watch");
+  const st = document.getElementById("status");
+
+  // Whatever the cat is saying belongs here while the tools are open -- the
+  // bubble has no room to exist next to them, and a reaction you can only see
+  // with the panel shut is a reaction you miss every time you go looking.
+  document.getElementById("now").textContent =
+    snap?.say || (target.label ? "now: " + target.label : "watching your apps");
+
+  const stop = document.getElementById("stop");
+
+  if (row) {
+    st.hidden = false;
+    w.hidden = true;
+    stop.hidden = false;
+    stop.disabled = false;
+    stop.textContent = "Stop";
+    document.getElementById("statName").textContent = row.label;
+    const over = row.limit && row.used >= row.limit;
+    const left = document.getElementById("statLeft");
+    left.textContent = over ? "over" : row.remaining_human + " left";
+    left.classList.toggle("gone", !!over);
+    const bar = document.getElementById("statBar");
+    bar.style.width = (row.limit ? Math.min(100, row.used / row.limit * 100) : 0) + "%";
+    bar.classList.toggle("over", !!over);
+    document.getElementById("statSub").textContent =
+      `${row.used_human} of ${row.limit_human} today`;
+    // The stepper now edits the live limit.
+    minsIdx = nearestIdx(Math.round(row.limit / 60));
+    document.getElementById("mins").textContent = MINS[minsIdx] + "m";
+  } else {
+    st.hidden = true;
+    w.hidden = false;
+    stop.hidden = true;
+    const short = (target.label || "").length > 18
+      ? target.label.slice(0, 17) + "…" : target.label;
+    w.textContent = short ? `+ Watch ${short}` : "+ Watch this app";
+    w.disabled = !target.id;
+  }
+}
+
+const nearestIdx = (m) =>
+  MINS.reduce((best, v, i) => Math.abs(v - m) < Math.abs(MINS[best] - m) ? i : best, 0);
+
+window.fkExpanded = (open) => {
+  document.body.classList.toggle("open", !!open);
+  cat.setPose(open ? "greet" : "sit");
+  // Read it the moment the panel opens, so the name is whatever you just left.
+  if (open) readTarget();
+};
+
+document.getElementById("open").onclick = () => { FKB?.openApp(); FKB?.collapse(); };
+document.getElementById("hide").onclick = () => FKB?.hideCat();
+
+// Drop the rule outright. The countdown has to be leaveable, or a limit set
+// once is a limit forever.
+document.getElementById("stop").onclick = (e) => {
+  if (!target.id) return;
+  FKB?.stopWatch(target.id);
+  e.target.textContent = "…";
+  e.target.disabled = true;
+  cat.setPose("sit");
+  setTimeout(render, 1400);
+};
+
+function setMins(delta) {
+  minsIdx = Math.max(0, Math.min(MINS.length - 1, minsIdx + delta));
+  document.getElementById("mins").textContent = MINS[minsIdx] + "m";
+  // If this app is already watched, the stepper edits it live.
+  if (target.id && snapshot()?.rows?.some(
+        (r) => r.label.toLowerCase() === target.label.toLowerCase())) {
+    FKB?.watchApp(target.id, target.label, MINS[minsIdx]);
+  }
+}
+document.getElementById("minus").onclick = () => setMins(-1);
+document.getElementById("plus").onclick = () => setMins(1);
+document.getElementById("mins").onclick = () => setMins(1);
+
+document.getElementById("watch").onclick = (e) => {
+  if (!target.id) return;
+  FKB?.watchApp(target.id, target.label, MINS[minsIdx]);
+  e.target.textContent = "…";
+  e.target.disabled = true;
+  cat.setPose("pat");
+  // The tracker applies it on its next tick; show the real status once it has.
+  setTimeout(render, 1400);
+};
+
+// Keep the countdown live while the panel is open.
+setInterval(() => { if (document.body.classList.contains("open")) render(); }, 1000);
+
+// The cat follows the tracker whether the tools are open or not.
+//
+// Collapsed is what you see nearly all the time, so a warning or a limit
+// running out has to read at 104dp -- which means the pose has to change AND
+// the cat has to move. A pose swap alone, held for a few seconds, is not a
+// reaction anyone notices while they are being thrown out of an app.
+let shownPose = "sit";
+let shownSay = null;
+let bubbleTimer = 0;
+
+window.fkBubbleOff = () => {
+  clearTimeout(bubbleTimer);
+  document.body.classList.remove("saying");
+};
+
+function showBubble(text) {
+  document.getElementById("bubble").textContent = text;
+  document.body.classList.add("saying");
+  FKB?.bubble(true);                       // the window has to make room first
+  clearTimeout(bubbleTimer);
+  bubbleTimer = setTimeout(() => {
+    document.body.classList.remove("saying");
+    FKB?.bubble(false);
+  }, 7200);
+}
+
+setInterval(() => {
+  const snap = snapshot();
+  if (!snap) return;
+  const open = document.body.classList.contains("open");
+
+  if (snap.pose && snap.pose !== shownPose) {
+    shownPose = snap.pose;
+    cat.setPose(snap.pose);
+    // A limit running out is the one moment the cat is not a decoration:
+    // it takes a swing, the same as it does at a tab on the desktop.
+    // Twice: one swing at 104dp, seen out of the corner of your eye while
+    // the phone is throwing you back to the home screen, is missable.
+    if (snap.pose === "angry") {
+      setTimeout(() => cat.swipe(), 260);
+      setTimeout(() => cat.swipe(), 1500);
+    }
+  }
+
+  // A line is shown once, when it is new. The tracker clears it after a few
+  // seconds, so the same message later reads as new again -- which is right:
+  // it IS news the second time you are thrown out.
+  // The bubble is for the collapsed cat; open tools say it in the panel,
+  // which render() takes care of every second.
+  if (snap.say !== shownSay) {
+    shownSay = snap.say;
+    if (snap.say && !open) showBubble(snap.say);
+  }
+}, 1000);
+let asleep = false;
+document.getElementById("sleep").onclick = (e) => {
+  asleep = !asleep;
+  cat.setPose(asleep ? "sleep" : "sit");
+  e.target.textContent = asleep ? "Wake" : "Sleep";
+};
+</script>
+</body>
+</html>

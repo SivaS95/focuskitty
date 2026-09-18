@@ -1,0 +1,42 @@
+[package]
+name = "focuskitty"
+version = "0.1.0"
+edition = "2021"
+
+# Its own workspace: a Tauri app pulls a very different dependency tree from the
+# library crates, and sharing a lockfile with them causes more pain than it saves.
+[workspace]
+
+[lib]
+name = "focuskitty_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "macos-private-api", "image-png"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+fk-core = { path = "../../crates/fk-core" }
+
+[target.'cfg(target_os = "android")'.dependencies]
+fk-probe-android = { path = "../../crates/fk-probe-android" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+fk-probe-macos = { path = "../../crates/fk-probe-macos" }
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSResponder", "NSView", "NSApplication"] }
+objc2-foundation = { version = "0.3", features = ["NSGeometry"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

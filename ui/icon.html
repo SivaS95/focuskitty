@@ -1,0 +1,10 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="http://localhost:8777/cat.css">
+<style>html,body{margin:0;background:transparent}#m{width:300px;height:300px}
+.stage{height:300px}.cat-root{margin-left:-140px;bottom:-10px}</style></head>
+<body><div id="m"></div>
+<script type="module">
+import { Cat } from "http://localhost:8777/cat.js";
+const c=new Cat(document.getElementById("m"),{coat:"cream",pose:"sit"});
+c.paused=true; for(let i=0;i<80;i++) c.step(1/60);
+</script></body></html>

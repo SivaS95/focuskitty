@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FocusKitty</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
+    user-select: none; -webkit-user-select: none; }
+  body { font: 13px/1.45 ui-rounded, "SF Pro Rounded", -apple-system, system-ui,
+    "Segoe UI", sans-serif; }
+  .card {
+    position: absolute; inset: 6px;
+    background: #1c1e24;
+    border: 1px solid rgba(255,255,255,.09);
+    border-radius: 14px;
+    box-shadow: 0 18px 46px rgba(0,0,0,.5);
+    color: #e9ecf3;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  header { padding: 12px 14px 8px; display: flex; align-items: baseline; gap: 8px; }
+  header h1 { margin: 0; font-size: 13px; font-weight: 650; letter-spacing: .01em; }
+  header .now { margin-left: auto; font-size: 11px; color: #8b93a3;
+    max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .scroll { flex: 1; overflow-y: auto; min-height: 0; }
+  .rows { padding: 2px 8px 6px; }
+  .row { padding: 7px 6px; border-radius: 8px; }
+  .row:hover { background: rgba(255,255,255,.05); }
+  .row .top { display: flex; align-items: baseline; gap: 8px; }
+  .row .name { font-weight: 550; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; min-width: 0; }
+  .row .top { min-width: 0; }
+  .row .time { flex: none; white-space: nowrap; }
+  .row .time { margin-left: auto; font-variant-numeric: tabular-nums;
+    font-size: 11.5px; color: #99a1b1; }
+  .row.active { background: rgba(91,140,255,.12);
+    box-shadow: inset 0 0 0 1px rgba(91,140,255,.28); }
+  .row .left { font-variant-numeric: tabular-nums; font-weight: 650; }
+  .row.active .left { color: #9db8ff; }
+  .row .left.gone { color: #ff8577; }
+  .row .sub { font-size: 11px; color: #7d8494; margin-top: 3px;
+    display: flex; gap: 8px; align-items: baseline; }
+  .row .st { font-weight: 600; letter-spacing: .02em; }
+  .row .st.s-watching { color: #7ea6ff; }
+  .row .st.s-time     { color: #ffb36b; }
+  .row .st.s-closed   { color: #ff8577; }
+  .row .st.s-paused   { color: #c9a227; }
+  .row .used { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .row .lim { width: 46px; padding: 1px 4px; font: inherit; font-size: 11px;
+    color: #e9ecf3; background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.14); border-radius: 5px;
+    font-variant-numeric: tabular-nums; text-align: right; }
+  .row .lim:focus { outline: none; border-color: #5b8cff; }
+  .row .unit { margin-left: 2px; color: #7d8494; }
+  /* A word, not a glyph: nobody has to learn what "stop" means. */
+  .row .drop { padding: 2px 7px; margin-left: 7px; line-height: 1.2;
+    font: inherit; font-size: 11px; color: #8b93a3; background: none;
+    border: 1px solid rgba(255,255,255,.14); border-radius: 6px;
+    opacity: 0; transition: opacity .12s; }
+  .row:hover .drop { opacity: 1; }
+  .row .drop:hover { color: #ff8577; background: rgba(255,120,110,.14); }
+  .row .dot { width: 6px; height: 6px; border-radius: 50%; background: #5b8cff;
+    display: inline-block; margin-right: 5px; vertical-align: middle; }
+  .bar { height: 4px; border-radius: 2px; background: rgba(255,255,255,.1);
+    margin-top: 6px; overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: 2px;
+    background: linear-gradient(90deg,#5b8cff,#8f7bff); }
+  .bar i.over { background: linear-gradient(90deg,#ff7a6b,#ff4d6d); }
+  .empty { padding: 20px 14px; color: #7d8494; text-align: center; font-size: 12.5px; }
+
+  .play { padding: 8px 8px 0; display: flex; flex-wrap: wrap; gap: 5px;
+    border-top: 1px solid rgba(255,255,255,.08); }
+  .play .lbl { width: 100%; font-size: 10.5px; letter-spacing: .07em;
+    text-transform: uppercase; color: #7d8494; margin-bottom: 1px; }
+  .play button { padding: 5px 9px; border-radius: 7px; font-size: 12px; }
+
+  .acts { flex: none; padding: 8px; border-top: 1px solid rgba(255,255,255,.08);
+    display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: #1c1e24; }
+  .acts.one { grid-template-columns: 1fr; }
+  button {
+    font: inherit; color: inherit; cursor: pointer;
+    background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.09);
+    border-radius: 9px; padding: 8px 9px; text-align: center;
+  }
+  button:hover { background: rgba(255,255,255,.13); }
+  button.primary { background: #3b6fe0; border-color: #3b6fe0; }
+  #acts button { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  button.primary:hover { background: #4a7bec; }
+  button.warn { color: #ffbfae; }
+  .paused { padding: 7px 14px; background: rgba(255,170,60,.14);
+    color: #ffcf8f; font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="card">
+  <header>
+    <h1>FocusKitty</h1>
+    <span class="now" id="now"></span>
+  </header>
+  <div id="paused" class="paused" hidden></div>
+  <div class="scroll">
+    <div class="rows" id="rows"></div>
+    <div class="play" id="play"></div>
+  </div>
+  <div class="acts" id="acts"></div>
+</div>
+
+<script type="module">
+const invoke = (c, a) => window.__TAURI__.core.invoke(c, a);
+const listen = (e, f) => window.__TAURI__.event.listen(e, f);
+
+const $rows = document.getElementById("rows");
+const $acts = document.getElementById("acts");
+const $play = document.getElementById("play");
+const $now  = document.getElementById("now");
+const $paused = document.getElementById("paused");
+
+/*
+ * Build once, update in place.
+ *
+ * The first version rewrote innerHTML on every snapshot -- once a second -- so
+ * every button was destroyed and recreated continuously. That is what made the
+ * control strip flicker, and it got worse on click because a button was also
+ * being appended asynchronously.
+ */
+const B = {};
+function buildOnce() {
+  const mk = (key, label, cls, fn, full) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    if (cls) b.className = cls;
+    if (full) b.style.gridColumn = "1 / -1";
+    b.onclick = fn;
+    $acts.appendChild(b);
+    B[key] = b;
+    return b;
+  };
+
+  // Adapts to whatever is in front: a tab OR a native app.
+  mk("watch", "+ Watch this", "primary", async () => {
+    B.watch.textContent = "…";
+    const d = state.target_is_app
+      ? await invoke("watch_current_app", { minutes: 20 })
+      : await invoke("watch_current", { minutes: 20 });
+    B.watch.textContent = d ? `watching ${d}` : "nothing in front";
+    B.watchResetAt = Date.now() + 1600;
+  });
+  mk("pause", "Pause 15m", "warn", () => {
+    invoke("pause", { minutes: state.paused ? 0 : 15 });
+  });
+  mk("pause1h", "Pause 1h", "warn", () => invoke("pause", { minutes: 60 }));
+  mk("sleep", "Send cat to sleep", "", () =>
+    invoke("set_sleeping", { sleeping: !state.sleeping }));
+  mk("hide", "Hide the cat", "", async () => {
+    const vis = await invoke("cat_visible");
+    await invoke("set_cat_visible", { visible: !vis });
+    B.hide.textContent = vis ? "Show the cat" : "Hide the cat";
+  }, true);
+  mk("open", "Open FocusKitty…", "", () => invoke("open_main"), true);
+  mk("quit", "Quit FocusKitty", "warn", () => invoke("quit"), true);
+
+  $play.innerHTML = `<span class="lbl">play</span>`;
+  for (const [label, action] of [
+    ["pat","pat"],["greet","greet"],["lick","lick"],["yawn","yawn"],
+    ["stretch","stretch"],["groom","groom"],["walk","walk"],["bored","bored"],
+    ["angry","angry"],["eat","eat"],["read","read"],["sleep","sleep"],["swipe","swipe"],["startle","startle"],["sit","sit"],
+  ]) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.onclick = () => invoke("cat_do", { action });
+    $play.appendChild(b);
+  }
+}
+
+let state = { rows: [], paused: false, sleeping: false };
+
+/** Reuse row elements keyed by label; only touch what changed. */
+function renderRows(rows) {
+  const seen = new Set();
+  for (const r of rows) {
+    seen.add(r.label);
+    let el = $rows.querySelector(`[data-k="${CSS.escape(r.label)}"]`);
+    if (!el) {
+      el = document.createElement("div");
+      el.dataset.k = r.label;
+      el.innerHTML = `<div class="top"><span class="name"></span>
+        <span class="time left"></span>
+        <button class="drop" title="stop watching">stop</button></div>
+        <div class="bar"><i></i></div>
+        <div class="sub"><span class="st"></span>
+          <span class="used"></span>
+          <input class="lim" type="number" min="1" max="1440"
+                 title="minutes a day — Enter to save"><span class="unit">m</span></span></div>`;
+      const lim = el.querySelector(".lim");
+      const save = async () => {
+        const v = Number(lim.value) || 1;
+        await invoke("set_limit", { label: r.label, minutes: v });
+        lim.blur();
+        invoke("snapshot").then(render);
+      };
+      lim.onkeydown = (ev) => { if (ev.key === "Enter") save(); };
+      lim.onblur = save;
+      el.querySelector(".drop").onclick = async (ev) => {
+        ev.stopPropagation();
+        await invoke("remove_rule", { label: r.label });
+        el.remove();
+        invoke("snapshot").then(render);
+      };
+      $rows.appendChild(el);
+    }
+    const over = r.limit && r.used >= r.limit;
+    const cls = "row" + (r.active ? " active" : "");
+    if (el.className !== cls) el.className = cls;
+    const name = (r.active ? "• " : "") + r.label;
+    const q = (sel) => el.querySelector(sel);
+    if (q(".name").textContent !== name) q(".name").textContent = name;
+    const t = over ? "over" : r.remaining_human + " left";
+    if (q(".left").textContent !== t) q(".left").textContent = t;
+    q(".left").classList.toggle("gone", !!over);
+    if (q(".st").textContent !== r.status) q(".st").textContent = r.status;
+    q(".st").className = "st s-" + r.status.split(" ")[0].replace("·", "");
+    const used = `${r.used_human} of`;
+    if (q(".used").textContent !== used) q(".used").textContent = used;
+    const lim = q(".lim");
+    // Never overwrite what is being typed.
+    if (document.activeElement !== lim) {
+      const mins = String(Math.max(1, Math.round(r.limit / 60)));
+      if (lim.value !== mins) lim.value = mins;
+    }
+    const bar = q(".bar i");
+    const pct = r.limit ? Math.min(100, r.used / r.limit * 100) : 0;
+    const w = pct.toFixed(1) + "%";
+    if (bar.style.width !== w) bar.style.width = w;
+    bar.classList.toggle("over", !!over);
+  }
+  for (const el of [...$rows.children])
+    if (el.dataset.k && !seen.has(el.dataset.k)) el.remove();
+
+  let empty = $rows.querySelector(".empty");
+  if (!rows.length && !empty) {
+    empty = document.createElement("div");
+    empty.className = "empty";
+    empty.innerHTML = "Nothing watched yet.<br>Open a site and tap <b>Watch this site</b>.";
+    $rows.appendChild(empty);
+  } else if (rows.length && empty) empty.remove();
+}
+
+function render(s) {
+  state = s;
+  const now = s.current ? "now: " + s.current : "";
+  if ($now.textContent !== now) $now.textContent = now;
+
+  $paused.hidden = !s.paused;
+  if (s.paused) {
+    const t = `paused — ${s.paused_mins_left} min left`;
+    if ($paused.textContent !== t) $paused.textContent = t;
+  }
+
+  renderRows(s.rows);
+
+  // Labels only; the elements themselves are never replaced.
+  const pauseLabel = s.paused ? "Resume" : "Pause 15m";
+  if (B.pause.textContent !== pauseLabel) B.pause.textContent = pauseLabel;
+  const sleepLabel = s.sleeping ? "Wake the cat" : "Send cat to sleep";
+  if (B.sleep.textContent !== sleepLabel) B.sleep.textContent = sleepLabel;
+
+  // Name the thing, so you know what the button will do before you press it.
+  if (!B.watchResetAt || Date.now() > B.watchResetAt) {
+    B.watchResetAt = 0;
+    const already = s.rows.some(r => r.label === s.target_label);
+    const label = s.target_label
+      ? (already ? `${s.target_label} — watched` : `+ Watch ${s.target_label}`)
+      : "+ Watch this";
+    if (B.watch.textContent !== label) B.watch.textContent = label;
+    B.watch.disabled = already;
+    B.watch.style.opacity = already ? ".55" : "1";
+  }
+}
+
+buildOnce();
+invoke("cat_visible").then(v => { B.hide.textContent = v ? "Hide the cat" : "Show the cat"; });
+listen("fk://snapshot", e => render(e.payload));
+invoke("snapshot").then(render);
+
+// Poll as well as listen.
+//
+// A hidden window's webview gets throttled by macOS, so it can miss ticks and
+// come back showing a frozen number until something wakes it -- which is why
+// the timer appeared stuck until the panel was reopened. An explicit invoke is
+// a direct IPC call and is not subject to that.
+setInterval(() => {
+  if (!document.hidden) invoke("snapshot").then(render);
+}, 1000);
+addEventListener("focus", () => invoke("snapshot").then(render));
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) invoke("snapshot").then(render);
+});
+addEventListener("keydown", e => { if (e.key === "Escape") invoke("close_popover"); });
+</script>
+</body>
+</html>

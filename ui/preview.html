@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FocusKitty — cat preview</title>
+<link rel="stylesheet" href="cat.css">
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; grid-template-rows: 1fr auto;
+    font: 13px/1.5 ui-rounded, "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+    background: #cfd6e4;
+    transition: background .4s ease;
+  }
+  body[data-bg="dark"]  { background: #171a20; color: #e8ebf2; }
+  body[data-bg="light"] { background: #f4f6fa; color: #222; }
+  body[data-bg="desk"]  {
+    background:
+      radial-gradient(900px 500px at 70% 15%, #8fa4c8, transparent 60%),
+      linear-gradient(160deg, #38415a 0%, #232838 55%, #171a24 100%);
+    color: #e8ebf2;
+  }
+  body[data-bg="busy"] {
+    background:
+      repeating-linear-gradient(45deg, #b9c4d6 0 22px, #aab6cb 22px 44px);
+  }
+
+  .arena { position: relative; overflow: hidden; }
+  #mount { position: absolute; inset: 0; display: grid; place-items: end stretch; padding-bottom: 4vh; }
+  .floor {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 22vh;
+    background: linear-gradient(transparent, rgba(0,0,0,.18));
+    pointer-events: none;
+  }
+
+  .panel {
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+    padding: 12px 16px; background: rgba(128,128,128,.14);
+    backdrop-filter: blur(12px); border-top: 1px solid rgba(128,128,128,.28);
+  }
+  .group { display: flex; gap: 5px; align-items: center; }
+  .group > label { opacity: .65; margin-right: 3px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .06em; }
+  button {
+    font: inherit; padding: 5px 11px; border-radius: 8px; cursor: pointer;
+    border: 1px solid rgba(128,128,128,.4); background: rgba(255,255,255,.14);
+    color: inherit;
+  }
+  button:hover { background: rgba(255,255,255,.3); }
+  button[aria-pressed="true"] { background: #3b6fe0; color: #fff; border-color: #3b6fe0; }
+  input[type=text] {
+    font: inherit; padding: 5px 9px; border-radius: 8px; width: 210px;
+    border: 1px solid rgba(128,128,128,.4); background: rgba(255,255,255,.14);
+    color: inherit;
+  }
+  .hint { opacity: .6; font-size: 11.5px; }
+</style>
+</head>
+<body data-bg="desk">
+  <div class="arena">
+    <div class="floor"></div>
+    <div id="mount"></div>
+  </div>
+
+  <div class="panel">
+    <div class="group">
+      <label>Pose</label>
+      <button data-pose="sit" aria-pressed="true">sit</button>
+      <button data-pose="walk">walk</button>
+      <button data-pose="sleep">sleep</button>
+      <button data-pose="pat">pat</button>
+      <button data-pose="greet">greet</button>
+      <button data-pose="bored">bored</button>
+      <button data-pose="angry">angry</button>
+      <button data-pose="confront">confront</button>
+    </div>
+    <div class="group">
+      <label>Do</label>
+      <button data-do="doBlink">blink</button>
+      <button data-do="yawn">yawn</button>
+      <button data-do="lick">lick</button>
+      <button data-do="stretch">stretch</button>
+      <button data-do="groom">groom</button>
+      <button data-do="earFlick">ear flick</button>
+      <button data-do="lookAround">look around</button>
+      <button data-do="startle">startle</button>
+    </div>
+    <div class="group">
+      <label>Coat</label>
+      <button data-coat="cream" aria-pressed="true">cream</button>
+      <button data-coat="white">white</button>
+      <button data-coat="black">black</button>
+    </div>
+    <div class="group">
+      <label>Behind</label>
+      <button data-bg="desk" aria-pressed="true">desktop</button>
+      <button data-bg="dark">dark</button>
+      <button data-bg="light">light</button>
+      <button data-bg="busy">busy</button>
+    </div>
+    <div class="group">
+      <input type="text" id="say" placeholder="say something…"
+             value="YouTube — 5m left">
+      <button id="sayBtn">say</button>
+    </div>
+    <span class="hint">the head follows your pointer · <b>drag the cat</b> anywhere · <b>click</b> it to say hello · leave it alone and it looks around by itself</span>
+  </div>
+
+<script type="module">
+import { Cat } from "./cat.js";
+
+const mount = document.getElementById("mount");
+let cat = new Cat(mount);
+wire();
+
+function wire() {
+  // Pick it up and put it anywhere; a plain click is a greeting.
+  cat.enableDrag({
+    onClick: () => cat.say("mrrp", 1600),
+  });
+
+  // Aim at the cat's HEAD, not the middle of the container: the cat-root is
+  // 280x210 pinned to the bottom of a 230-tall stage, and the head sits at
+  // viewBox (190, 94) inside it. Using the container centre made the cat look
+  // past you at everything.
+  cat.followPointer(() => {
+    const r = mount.getBoundingClientRect();
+    return { x: r.left + r.width / 2 + 50, y: r.top + r.height - 230 + 20 + 94 };
+  });
+}
+
+const press = (sel, el) => {
+  document.querySelectorAll(sel).forEach(b => b.setAttribute("aria-pressed", "false"));
+  el.setAttribute("aria-pressed", "true");
+};
+
+document.querySelectorAll("[data-pose]").forEach(b =>
+  b.onclick = () => { cat.setPose(b.dataset.pose); press("[data-pose]", b); });
+
+document.querySelectorAll("[data-do]").forEach(b =>
+  b.onclick = () => cat[b.dataset.do]());
+
+document.querySelectorAll("[data-bg]").forEach(b =>
+  b.onclick = () => { document.body.dataset.bg = b.dataset.bg; press("[data-bg]", b); });
+
+document.querySelectorAll("[data-coat]").forEach(b => b.onclick = () => {
+  const pose = cat.poseName;
+  cat.destroy();
+  cat = new Cat(mount, { coat: b.dataset.coat, pose });
+  wire();
+  press("[data-coat]", b);
+});
+
+const say = document.getElementById("say");
+document.getElementById("sayBtn").onclick = () => cat.say(say.value);
+say.onkeydown = e => { if (e.key === "Enter") cat.say(say.value); };
+
+// URL params, so screenshots can target a specific state:
+//   preview.html?state=writing&coat=ginger&bg=light&say=hello
+const q = new URLSearchParams(location.search);
+if (q.get("bg")) document.body.dataset.bg = q.get("bg");
+if (q.get("coat")) {
+  cat.destroy();
+  cat = new Cat(mount, { coat: q.get("coat"), pose: q.get("pose") || "sit" });
+  wire();
+} else if (q.get("pose")) {
+  cat.setPose(q.get("pose"), true);
+}
+if (q.get("state")) cat.setState(q.get("state"));
+if (q.get("do")) setTimeout(() => cat[q.get("do")](), 300);
+if (q.get("say")) cat.say(q.get("say"), 0);
+if (q.get("look")) {
+  const [lx, ly] = q.get("look").split(",").map(Number);
+  setInterval(() => cat.lookAt(lx, ly), 100);
+}
+
+// Expose for poking at from the console.
+globalThis.cat = () => cat;
+</script>
+</body>
+</html>

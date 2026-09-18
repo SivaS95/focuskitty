@@ -1,0 +1,171 @@
+/* FocusKitty — the cat.
+ *
+ * The rig is side-facing SVG with jointed limbs. Parts are posed by writing the
+ * SVG `transform` attribute with an explicit pivot, never by CSS: SVG resolves
+ * CSS transform-origin against the viewBox rather than the element, so a CSS
+ * rotate silently translates the part too.
+ */
+
+:root {
+  --limb-shade: rgba(0, 0, 0, .14);
+  --line:        #3b3f48;
+  --whisker-edge:#1d2026;
+  --book:        #9a6152;
+  --book-line:   #f4e6da;
+  --page:        #f6efe1;
+  --ink:         #6b7484;
+  --pen:         #2b2f37;
+}
+
+/* --- coats ---------------------------------------------------------------- */
+
+.cat-root {
+  --fur: #f2e9d6; --fur-hi: #fffaf0; --fur-dark: #ddd0b7;
+  --fur-light: #fffdf8; --limb: #efe5d0; --paw: #fffdf8; --tail-tip: #fffdf8;
+  --ear-inner: #f4b3c0; --blush: #f79fb2; --nose: #e98da0;
+  --eye: #2b303a; --throat: #8a4f5c; --tongue: #f28fa6;
+  --whisker: #ffffff;
+  --bowl: #6fa8dc; --bowl-rim: #8fc0e8; --kibble: #b5763f; --kibble-dark: #8a5327;
+  --specs: #3c4250; --cover: #cf6b5c; --cover-dark: #a8503f;
+}
+.cat-root[data-coat="white"] {
+  --fur: #fbfbfc; --fur-hi: #ffffff; --fur-dark: #e2e5ea;
+  --fur-light: #ffffff; --limb: #f6f7f9; --paw: #ffffff; --tail-tip: #ffffff;
+  --ear-inner: #f6bcc6; --blush: #f9a7b8;
+}
+.cat-root[data-coat="black"] { --specs: #e6e9ef; }
+.cat-root[data-coat="black"] {
+  --fur: #3a3e46; --fur-hi: #4e535d; --fur-dark: #2b2e35;
+  --fur-light: #4a4f59; --limb: #34383f; --paw: #4c515b; --tail-tip: #4c515b;
+  --ear-inner: #8a5f6b; --blush: #9a6b78; --nose: #d98fa0;
+  --eye: #f2d769; --throat: #5d3540; --tongue: #e2809a;
+  --whisker: #f0f2f6; --whisker-edge: #000;
+}
+
+/* --- stage ---------------------------------------------------------------- */
+
+.stage {
+  position: relative;
+  width: 100%;
+  height: 230px;
+}
+
+.cat-root {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 280px;
+  height: 210px;
+  margin-left: -140px;
+  will-change: transform;
+}
+
+.cat-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* The two far legs read as further away. */
+.leg-far { opacity: .82; filter: brightness(.88); }
+
+.shadow {
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  width: 150px;
+  height: 20px;
+  translate: -50% 0;
+  background: radial-gradient(ellipse at center,
+              rgba(0,0,0,.34) 0%, rgba(0,0,0,.15) 48%, transparent 72%);
+  filter: blur(2.5px);
+  will-change: transform, opacity;
+}
+
+/* --- whiskers -------------------------------------------------------------
+ * Stroked from CSS. An inherited stroke="var(--x)" on a parent <g> does not
+ * resolve and paints nothing, which left the cat clean-shaven for a build.
+ */
+.brow {
+  fill: none;
+  stroke: var(--eye);
+  stroke-width: 3.4;
+  stroke-linecap: round;
+}
+
+.w-edge, .w-line { fill: none; stroke-linecap: round; }
+.w-edge { stroke: var(--whisker-edge); stroke-width: 3; opacity: .22; }
+.w-line { stroke: var(--whisker); stroke-width: 1.6; }
+
+/* --- sleep ----------------------------------------------------------------- */
+
+.zzz {
+  position: absolute;
+  left: 62%;
+  top: 14%;
+  opacity: 0;
+  transition: opacity .4s ease;
+  pointer-events: none;
+}
+.zzz.show { opacity: 1; }
+.zzz i {
+  position: absolute;
+  font: 700 15px/1 ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+  color: var(--whisker, #fff);
+  text-shadow: 0 1px 3px rgba(0,0,0,.4);
+  animation: drift 3.4s ease-in-out infinite;
+  opacity: 0;
+}
+.zzz i:nth-child(1) { animation-delay: 0s;   font-size: 13px; }
+.zzz i:nth-child(2) { animation-delay: 1.1s; font-size: 17px; }
+.zzz i:nth-child(3) { animation-delay: 2.2s; font-size: 21px; }
+
+@keyframes drift {
+  0%   { transform: translate(0, 10px) rotate(-8deg); opacity: 0; }
+  22%  { opacity: .95; }
+  100% { transform: translate(34px, -46px) rotate(16deg); opacity: 0; }
+}
+
+/* --- thought bubble -------------------------------------------------------- */
+
+.bubble-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(8px) scale(.85);
+  transition: opacity .2s ease, transform .36s cubic-bezier(.34, 1.56, .64, 1);
+}
+.bubble-layer.show { opacity: 1; transform: none; }
+
+.bubble-body {
+  position: absolute;
+  left: 64%;
+  bottom: 168px;
+  max-width: 200px;
+  padding: 9px 13px;
+  border-radius: 15px;
+  background: #fffdf7;
+  color: #2c313a;
+  font: 500 12.5px/1.38 ui-rounded, "SF Pro Rounded", -apple-system,
+        system-ui, "Segoe UI", sans-serif;
+  text-align: center;
+  box-shadow: 0 8px 22px rgba(0,0,0,.26);
+  white-space: pre-line;
+}
+.bubble-tail-dot {
+  position: absolute;
+  left: 64%;
+  border-radius: 50%;
+  background: #fffdf7;
+  box-shadow: 0 2px 7px rgba(0,0,0,.2);
+}
+.bubble-tail-dot.d1 { width: 10px; height: 10px; bottom: 153px; }
+.bubble-tail-dot.d2 { width: 6px;  height: 6px;  bottom: 141px; translate: -8px 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bubble-layer, .diary-layer, .zzz { transition: none; }
+  .zzz i { animation: none; }
+}

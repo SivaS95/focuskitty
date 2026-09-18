@@ -1,0 +1,20 @@
+[package]
+name = "fk-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "focuskitty"
+path = "src/main.rs"
+
+[dependencies]
+fk-core = { path = "../fk-core" }
+anyhow.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+fk-probe-macos = { path = "../fk-probe-macos" }
