@@ -20,7 +20,7 @@ USAGE:
     focuskitty uia [depth] [exe]  (Windows) dump a window's a11y tree
     focuskitty tabs               list every open tab in every window
     focuskitty apps               list apps you could set a limit on
-    focuskitty watch [--live]     run the timers. DRY RUN unless --live is passed
+    focuskitty watch [--live] [--for N]   run the timers; --for N exits after N seconds
     focuskitty add <domain> <minutes> [--mode <m>]
     focuskitty rules              show the current config
     focuskitty bench              measure how long reading the front tab costs
@@ -249,6 +249,15 @@ fn cmd_add(args: &[String]) -> Result<()> {
 
 /// The real loop. Closes nothing unless `--live`.
 fn cmd_watch(live: bool) -> Result<()> {
+    // `--for N` runs for N seconds and then prints what it charged. Without
+    // it the command runs forever and has to be killed, and a killed run
+    // reports nothing -- which is no use for proving the clock moved.
+    let run_for: Option<u64> = std::env::args()
+        .position(|a| a == "--for")
+        .and_then(|i| std::env::args().nth(i + 1))
+        .and_then(|v| v.parse().ok());
+    let started = std::time::Instant::now();
+
     let cfg = store::load_config()?;
     if cfg.sites.is_empty() && cfg.apps.is_empty() {
         println!("nothing watched yet — try:  focuskitty add youtube.com 30");
@@ -271,6 +280,20 @@ fn cmd_watch(live: bool) -> Result<()> {
     let mut open_tabs = Vec::new();
 
     loop {
+        if let Some(secs) = run_for {
+            if started.elapsed().as_secs() >= secs {
+                println!("\n--- charged after {secs}s");
+                let mut any = false;
+                for (key, st) in &tracker.state {
+                    println!("TOTAL {key:?} used_ms={}", st.used_ms);
+                    any = true;
+                }
+                if !any {
+                    println!("TOTAL (nothing was tracked at all)");
+                }
+                return Ok(());
+            }
+        }
         let now = chrono::Local::now();
         let current = p.current();
 

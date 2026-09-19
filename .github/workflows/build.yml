@@ -76,6 +76,43 @@ jobs:
         # and killed from outside, it wrote nothing at all.
         run: .\target\release\focuskitty.exe probe 10
 
+      # The question every fix so far has failed to answer: does the clock
+      # actually advance while a watched site sits in front of you, with
+      # nobody touching anything? Four fixes have been shipped on reasoning
+      # about symptoms relayed from a machine I cannot see. This answers it
+      # here, before anything is published.
+      - name: Does the timer actually run?
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\target\release\focuskitty.exe add youtube.com 60 --mode foreground-only
+          .\target\release\focuskitty.exe rules
+
+          $chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+          if (-not (Test-Path $chrome)) { $chrome = "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" }
+          Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          Start-Process $chrome -ArgumentList '--no-first-run','--new-window','https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+          Start-Sleep -Seconds 10
+
+          # Nothing touches the machine for the next 40 seconds. If the clock
+          # only moves when something happens, it will show here as zero.
+          Write-Host "--- running the timers for 40s, untouched"
+          $out = .\target\release\focuskitty.exe watch --for 40 2>&1 | Out-String
+          Write-Host $out
+
+          $m = [regex]::Match($out, 'used_ms=(\d+)')
+          if (-not $m.Success) { throw "nothing was tracked at all over 40 seconds" }
+          $used = [int]$m.Groups[1].Value
+          Write-Host "used_ms = $used"
+          # 40 seconds untouched should charge close to 40,000ms. Half that is
+          # a generous floor and still catches a clock that only moves when
+          # something happens to it.
+          if ($used -lt 20000) {
+            throw "the clock barely moved: ${used}ms over 40 seconds untouched"
+          }
+          Write-Host "PASS: ${used}ms charged over 40s with nobody touching the machine"
+
       # And again with accessibility forced on, to find out whether that is
       # the difference between a readable address and silence.
       - name: Again, with renderer accessibility forced
