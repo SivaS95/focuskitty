@@ -145,6 +145,38 @@ fn expiry_targets_the_tab_that_was_actually_in_front() {
     }
 }
 
+/// Raising a limit on something already over must restart its clock.
+///
+/// Reported from Windows: a site that had run out showed "1m left" once the
+/// limit was raised, and then sat there. The number came from the new limit;
+/// the clock was still stopped by the old one.
+#[test]
+fn raising_a_limit_starts_the_clock_again() {
+    let c = cfg(vec![site("youtube.com", 120, BackgroundMode::ForegroundOnly)]);
+    let mut tr = Tracker::new(c, t0());
+    let key = TargetKey::site("youtube.com");
+    let act = browsing("https://youtube.com/watch", "1");
+
+    for i in 0..130 {
+        tr.tick(t0() + Duration::seconds(i), Some(&act), &[]);
+    }
+    assert!(tr.state[&key].expired, "the budget should be spent");
+    let spent = tr.used(&key);
+
+    // The user gives it five minutes instead of two.
+    tr.config.sites[0].daily_limit_secs = 300;
+    for i in 130..160 {
+        tr.tick(t0() + Duration::seconds(i), Some(&act), &[]);
+    }
+
+    assert!(!tr.state[&key].expired, "raising the limit must un-expire it");
+    assert!(
+        tr.used(&key) > spent,
+        "the clock must move again: was {spent}s, still {}s",
+        tr.used(&key)
+    );
+}
+
 #[test]
 fn snooze_grants_more_time_and_rearms_warnings() {
     let mut tr = Tracker::new(cfg(vec![site("x.com", 10, BackgroundMode::ForegroundOnly)]), t0());

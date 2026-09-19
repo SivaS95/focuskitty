@@ -205,6 +205,33 @@ impl Tracker {
         let mut actions = Vec::new();
         let mut charged: BTreeSet<TargetKey> = BTreeSet::new();
 
+        // --- a limit that is no longer spent is no longer spent --------------
+        //
+        // `expired` latches on purpose: once the budget is gone the clock
+        // stops, because a number climbing forever past the limit says nothing
+        // that "over" did not already say. But raising a limit gives time
+        // back, and nothing cleared the flag -- so the interface read "1m
+        // left" while the clock stayed stopped, which looks exactly like a
+        // broken timer.
+        //
+        // Stated as an invariant rather than patched at each place a limit can
+        // change: if there is time remaining, the target is not expired. That
+        // covers editing a limit, snoozing, the day rolling over, and whatever
+        // changes a limit next.
+        let revived: Vec<TargetKey> = self
+            .state
+            .iter()
+            .filter(|(_, st)| st.expired)
+            .map(|(k, _)| k.clone())
+            .filter(|k| self.remaining_ms(k).is_some_and(|ms| ms > 0))
+            .collect();
+        for key in revived {
+            if let Some(st) = self.state.get_mut(&key) {
+                st.expired = false;
+                st.warned.clear();
+            }
+        }
+
         // --- foreground time -------------------------------------------------
         if let Some(key) = &foreground {
             let st = self.state.entry(key.clone()).or_default();
