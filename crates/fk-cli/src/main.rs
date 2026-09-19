@@ -16,7 +16,7 @@ const USAGE: &str = "\
 focuskitty — headless tracker (phase 1)
 
 USAGE:
-    focuskitty probe              watch what the tracker sees, once a second
+    focuskitty probe [n]          watch what the tracker sees, once a second
     focuskitty uia [depth] [exe]  (Windows) dump a window's a11y tree
     focuskitty tabs               list every open tab in every window
     focuskitty apps               list apps you could set a limit on
@@ -106,11 +106,25 @@ fn main() -> Result<()> {
 /// Print what the probe sees, every second. The first line of defence against
 /// "it says I'm on YouTube but I'm not".
 fn cmd_probe() -> Result<()> {
+    // `probe <n>` stops after n reads. A run that ends by itself is the only
+    // kind whose output survives: killed from outside, everything it had
+    // written was lost and the log came back empty.
+    let ticks: Option<u64> = std::env::args().nth(2).and_then(|s| s.parse().ok());
     let p = probe();
-    println!("watching the frontmost window — ctrl-c to stop\n");
+    match ticks {
+        Some(n) => println!("watching the frontmost window for {n} reads\n"),
+        None => println!("watching the frontmost window — ctrl-c to stop\n"),
+    }
     let mut last = String::new();
+    let mut seen = 0u64;
 
     loop {
+        if let Some(n) = ticks {
+            if seen >= n {
+                return Ok(());
+            }
+            seen += 1;
+        }
         let line = match p.current() {
             None => "· idle / locked".to_string(),
             Some(a) => match &a.tab {
@@ -126,8 +140,9 @@ fn cmd_probe() -> Result<()> {
             },
         };
 
-        // Only reprint on change, so the log reads as a history of what you did.
-        if line != last {
+        // Only reprint on change, so the log reads as a history of what you
+        // did -- except when counting down, where every read is evidence.
+        if line != last || ticks.is_some() {
             println!("[{}] {line}", chrono::Local::now().format("%H:%M:%S"));
             last = line;
         }

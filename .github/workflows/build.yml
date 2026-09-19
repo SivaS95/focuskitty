@@ -72,15 +72,9 @@ jobs:
       # where it should answer "youtube.com".
       - name: What the tracker itself sees
         shell: pwsh
-        run: |
-          $p = Start-Process -FilePath .\target\release\focuskitty.exe -ArgumentList 'probe' `
-                 -RedirectStandardOutput probe.log -RedirectStandardError probe.err -PassThru -NoNewWindow
-          Start-Sleep -Seconds 12
-          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-          Write-Host "--- stdout"
-          Get-Content probe.log -TotalCount 20 -ErrorAction SilentlyContinue
-          Write-Host "--- stderr"
-          Get-Content probe.err -TotalCount 20 -ErrorAction SilentlyContinue
+        # Straight to the job log, and ending by itself. Redirected to a file
+        # and killed from outside, it wrote nothing at all.
+        run: .\target\release\focuskitty.exe probe 10
 
       # And again with accessibility forced on, to find out whether that is
       # the difference between a readable address and silence.
