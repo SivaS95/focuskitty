@@ -34,6 +34,12 @@ use tracking::{AppState, Snapshot};
 static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static CAT_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
+/// Whether the quick controls are on screen.
+///
+/// Kept here rather than asked of the window, because asking costs a trip to
+/// the main thread and the clock cannot afford to wait on it.
+static POPOVER_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Debounce for opening the controls. `Instant` has no const constructor, so
 /// this starts empty rather than being conjured out of a transmute.
 static LAST_TOGGLE: std::sync::Mutex<Option<std::time::Instant>> =
@@ -151,6 +157,7 @@ fn close_popover(app: AppHandle) {
     if let Some(p) = app.get_webview_window("popover") {
         let _ = p.hide();
     }
+    POPOVER_OPEN.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[tauri::command]
@@ -502,11 +509,13 @@ fn toggle_popover(app: &AppHandle, near: PhysicalPosition<f64>) {
     let Some(p) = app.get_webview_window("popover") else { return };
     if p.is_visible().unwrap_or(false) {
         let _ = p.hide();
+        POPOVER_OPEN.store(false, std::sync::atomic::Ordering::Relaxed);
         return;
     }
     let _ = overlay::place_popover(&p, near);
     let _ = p.show();
     let _ = p.set_focus();
+    POPOVER_OPEN.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 // --- setup ------------------------------------------------------------------
@@ -633,6 +642,7 @@ pub fn run() {
                 p.on_window_event(move |e| {
                     if let tauri::WindowEvent::Focused(false) = e {
                         let _ = pc.hide();
+                        POPOVER_OPEN.store(false, std::sync::atomic::Ordering::Relaxed);
                     }
                 });
             }
@@ -985,10 +995,11 @@ fn spawn_cursor_watch(app: AppHandle) {
             // Leave the flag alone while the controls are open: every flip makes
             // the window server re-evaluate pointer ownership, which blurs the
             // popover, and the popover hides on blur. That was the flicker.
-            let popover_up = app
-                .get_webview_window("popover")
-                .and_then(|p| p.is_visible().ok())
-                .unwrap_or(false);
+            // The flag, not the window. This loop runs at 25Hz, and every
+            // Tauri window call from a background thread is a round trip to
+            // the main thread that waits for an answer -- forty of them a
+            // second, each able to stall on an event loop that is busy.
+            let popover_up = POPOVER_OPEN.load(std::sync::atomic::Ordering::Relaxed);
 
             let (hx, hy, hw, hh) = *HIT_BOX.lock().unwrap();
             let over = rx >= hx && rx <= hx + hw && ry >= hy && ry <= hy + hh;
@@ -1068,10 +1079,15 @@ fn spawn_tick(app: AppHandle, state: Arc<AppState>) {
                 // Not while the controls are open -- the cat would walk out
                 // from under the panel you are using -- and not while a close
                 // is queued, since the two would fight over the position.
-                let busy = app2
-                    .get_webview_window("popover")
-                    .and_then(|p| p.is_visible().ok())
-                    .unwrap_or(false);
+                //
+                // Read from a flag, NOT by asking the window. A Tauri window
+                // method called off the main thread marshals onto it and
+                // WAITS, so this one line handed the clock straight back to
+                // the event loop it had just been moved off: if the loop was
+                // not pumping, the tick blocked here and time stopped until
+                // something woke it -- which is why opening and closing the
+                // quick tools started it again.
+                let busy = POPOVER_OPEN.load(std::sync::atomic::Ordering::Relaxed);
                 let wander = {
                     let mut inner = state.inner.lock().unwrap();
                     if inner.pending_close.is_some() || busy {
@@ -1104,10 +1120,18 @@ fn spawn_tick(app: AppHandle, state: Arc<AppState>) {
                 go_and_swipe(app2.clone(), state.clone(), job, rect);
             }
 
+            // Handed to the main thread rather than sent from here. Emitting
+            // reaches into every webview, and anything that reaches into a
+            // window can wait on the thread that owns it. `run_on_main_thread`
+            // only queues -- it returns at once -- so a busy interface can
+            // fall behind without the clock falling behind with it.
             let snap = state.snapshot();
-            if let Err(e) = app2.emit("fk://snapshot", &snap) {
-                tracing::warn!("emitting snapshot: {e}");
-            }
+            let app3 = app2.clone();
+            let _ = app2.run_on_main_thread(move || {
+                if let Err(e) = app3.emit("fk://snapshot", &snap) {
+                    tracing::warn!("emitting snapshot: {e}");
+                }
+            });
         };
 
         #[cfg(target_os = "macos")]
