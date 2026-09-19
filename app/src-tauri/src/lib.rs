@@ -809,7 +809,21 @@ fn go_and_swipe(
 
         let app_c = app.clone();
         let state_c = state.clone();
-        let _ = app.run_on_main_thread(move || {
+
+        // Same story as the tick, and for two reasons rather than one.
+        //
+        // The main thread is the window event loop, which on Windows sleeps
+        // until a message arrives -- so the close was posted to something that
+        // was not listening. The cat walked and swiped, because that runs
+        // here, and then nothing was closed.
+        //
+        // And even if it had run there it could not have worked: UI Automation
+        // is reached through COM, and the crate asks for a multi-threaded
+        // apartment. A GUI main thread is already single-threaded, so that
+        // request is REFUSED and every UIA call fails. Reading the address --
+        // which is how the close re-verifies it is shutting the right tab --
+        // can only work off the main thread.
+        let finish = move || {
             use fk_core::activity::CloseOutcome;
             let (label, outcome, verb) = match job {
                 tracking::PendingClose::Tab(label, tab) => {
@@ -837,7 +851,12 @@ fn go_and_swipe(
             }
             drop(inner);
             let _ = app_c.emit("fk://snapshot", &state_c.snapshot());
-        });
+        };
+
+        #[cfg(target_os = "macos")]
+        let _ = app.run_on_main_thread(finish);
+        #[cfg(not(target_os = "macos"))]
+        finish();
 
         // Look pleased with itself, then drop back down and walk home.
         std::thread::sleep(Duration::from_millis(650));
