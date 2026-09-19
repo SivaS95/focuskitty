@@ -231,6 +231,11 @@ impl ActivityProbe for WinProbe {
     fn current(&self) -> Option<Activity> {
         let (hwnd, _pid, exe) = self.front()?;
 
+        // The desktop and the taskbar are not something you are doing.
+        if is_shell_window(&exe, hwnd) {
+            return None;
+        }
+
         // Our own windows ARE reported, deliberately. The tracker needs to
         // know the difference between "FocusKitty is in front" -- keep
         // remembering what they were doing, they only opened the controls --
@@ -387,6 +392,36 @@ fn pretty_exe(exe: &str) -> String {
         Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
         None => stem.to_string(),
     }
+}
+
+/// Window class name. The only way to tell Explorer-the-shell (the taskbar,
+/// the desktop) from Explorer-the-file-manager: both are explorer.exe.
+fn window_class(hwnd: HWND) -> String {
+    use windows::Win32::UI::WindowsAndMessaging::GetClassNameW;
+    let mut buf = [0u16; 128];
+    let n = unsafe { GetClassNameW(hwnd, &mut buf) };
+    if n <= 0 {
+        return String::new();
+    }
+    String::from_utf16_lossy(&buf[..n as usize])
+}
+
+/// Is this the desktop or the taskbar rather than an application?
+///
+/// Clicking the cat deactivates whatever you were using, and because the cat
+/// window refuses focus Windows hands the foreground to the SHELL. Left alone,
+/// the tracker then records the taskbar as "what you were doing" and offers to
+/// put a limit on it -- which is what "now: Explorer" meant while the user was
+/// plainly sitting on YouTube.
+fn is_shell_window(exe: &str, hwnd: HWND) -> bool {
+    if !exe.eq_ignore_ascii_case("explorer.exe") {
+        return false;
+    }
+    matches!(
+        window_class(hwnd).as_str(),
+        // taskbar         | secondary taskbar     | desktop
+        "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "Progman" | "WorkerW"
+    )
 }
 
 fn window_title(hwnd: HWND) -> Option<String> {

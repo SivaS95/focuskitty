@@ -409,7 +409,14 @@ pub fn tick(state: &AppState, probe: &dyn ActivityProbe) {
             carried.as_ref()
         } else {
             inner.self_front = 0;
-            inner.last_counted = current.clone();
+            // Only REPLACE the memory when there is something to replace it
+            // with. Nothing in front means the screen is locked, or focus has
+            // fallen somewhere that is not an application -- neither of which
+            // means "you have finished with what you were doing", and both of
+            // which would otherwise erase the target that "Watch this" offers.
+            if current.is_some() {
+                inner.last_counted = current.clone();
+            }
             current.as_ref()
         }
     };
