@@ -35,6 +35,10 @@ jobs:
       # only on Windows, because the crate does not exist anywhere else.
       - if: runner.os == 'Windows'
         run: cargo test -p fk-probe-windows --verbose
+      # The whole workspace, not just the crate that changed. A probe crate
+      # that compiles while the CLI calling it does not is a break that only
+      # showed up ten minutes later in the app build.
+      - run: cargo check --workspace --all-targets
 
   windows:
     name: Windows app

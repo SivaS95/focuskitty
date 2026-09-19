@@ -568,6 +568,68 @@ fn find_url(
     }
 }
 
+/// Print the accessibility tree of whatever is in front, for diagnosis.
+///
+/// Kept even though `find_url` no longer needs to be told where to look: when
+/// a browser yields nothing, this is what distinguishes "the tree is empty"
+/// from "the value is there and my test rejected it".
+pub fn dump_front_window(max_depth: usize) -> Result<String> {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.is_invalid() {
+        return Err(anyhow!("nothing is in front"));
+    }
+    let exe = pid_of(hwnd).and_then(exe_of).unwrap_or_default();
+    let ui = UIAutomation::new().map_err(|e| anyhow!("no UI Automation: {e}"))?;
+    let root = ui
+        .element_from_handle(Handle::from(hwnd.0 as isize))
+        .map_err(|e| anyhow!("element_from_handle failed: {e}"))?;
+    let walker = ui.get_control_view_walker().map_err(|e| anyhow!("{e}"))?;
+
+    let mut out = format!("front: {exe}  title: {:?}\n", window_title(hwnd));
+    fn walk(
+        w: &uiautomation::UITreeWalker,
+        el: &UIElement,
+        depth: usize,
+        max: usize,
+        out: &mut String,
+    ) {
+        if depth > max {
+            return;
+        }
+        let kind = el.get_control_type().map(|c| format!("{c:?}")).unwrap_or_default();
+        let name = el.get_name().unwrap_or_default();
+        let value = el
+            .get_pattern::<UIValuePattern>()
+            .ok()
+            .and_then(|p| p.get_value().ok())
+            .unwrap_or_default();
+        let name: String = name.chars().take(60).collect();
+        let value: String = value.chars().take(90).collect();
+        out.push_str(&format!(
+            "{:indent$}{kind} name={name:?}{}\n",
+            "",
+            if value.is_empty() {
+                String::new()
+            } else {
+                format!(" VALUE={value:?} url?={}", looks_like_url(&value))
+            },
+            indent = depth * 2
+        ));
+        if let Ok(child) = w.get_first_child(el) {
+            let mut cur = child;
+            for _ in 0..40 {
+                walk(w, &cur, depth + 1, max, out);
+                match w.get_next_sibling(&cur) {
+                    Ok(next) => cur = next,
+                    Err(_) => break,
+                }
+            }
+        }
+    }
+    walk(&walker, &root, 0, max_depth, &mut out);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
