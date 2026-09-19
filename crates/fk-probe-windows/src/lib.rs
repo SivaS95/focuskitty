@@ -82,6 +82,19 @@ pub struct WinProbe {
     /// and COM objects are not `Sync` -- which is exactly why `ActivityProbe`
     /// is deliberately not `Send`/`Sync`.
     automation: RefCell<Option<UIAutomation>>,
+    /// The last URL read, against the window and title it was read from.
+    ///
+    /// Reading a URL means walking the accessibility tree, which is expensive
+    /// -- and on a browser that does not expose a Document it is expensive AND
+    /// fruitless, burning the search timeout twice a second for nothing. That
+    /// cost lands on the main thread, and a tick that arrives more than five
+    /// seconds late is charged ZERO, because that is how a closed lid is meant
+    /// to look. So a slow read does not merely lag: it stops the clock.
+    ///
+    /// The title is the key because it is nearly free to read and it changes
+    /// on exactly the events that change the URL -- navigating, or switching
+    /// tabs. One search per page, instead of one per second.
+    cache: RefCell<Option<(isize, String, Option<String>)>>,
 }
 
 impl Default for WinProbe {
@@ -92,7 +105,7 @@ impl Default for WinProbe {
 
 impl WinProbe {
     pub fn new() -> Self {
-        Self { automation: RefCell::new(None) }
+        Self { automation: RefCell::new(None), cache: RefCell::new(None) }
     }
 
     /// The automation client, built on first use.
@@ -127,7 +140,21 @@ impl WinProbe {
     /// Deliberately not matched on the control's name ("Address and search
     /// bar"), which is localised -- that would work on an English Windows and
     /// silently fail everywhere else.
-    fn url_of(&self, hwnd: HWND) -> Option<String> {
+    fn url_of(&self, hwnd: HWND, title: &str) -> Option<String> {
+        let key = hwnd.0 as isize;
+        if let Some((k, t, url)) = self.cache.borrow().as_ref() {
+            if *k == key && t == title {
+                return url.clone();
+            }
+        }
+        let found = self.read_url(hwnd);
+        // Cached even when nothing was found: a browser that will not give up
+        // its address should be asked once per page, not once per second.
+        *self.cache.borrow_mut() = Some((key, title.to_string(), found.clone()));
+        found
+    }
+
+    fn read_url(&self, hwnd: HWND) -> Option<String> {
         self.with_ui(|ui| {
             let root = ui.element_from_handle(Handle::from(hwnd.0 as isize)).ok()?;
 
@@ -153,16 +180,16 @@ impl WinProbe {
                 .create_matcher()
                 .from_ref(&root)
                 .control_type(ControlType::Tab)
-                .depth(16)
-                .timeout(400)
+                .depth(10)
+                .timeout(150)
                 .find_first()
                 .ok()?;
             let tabs = ui
                 .create_matcher()
                 .from_ref(&strip)
                 .control_type(ControlType::TabItem)
-                .depth(16)
-                .timeout(400)
+                .depth(10)
+                .timeout(150)
                 .find_all()
                 .ok()?;
             if tabs.is_empty() {
@@ -199,13 +226,14 @@ impl ActivityProbe for WinProbe {
         // and "nothing readable is in front", which means idle. Answering
         // None for both collapses that distinction and loses the memory.
 
+        let title = window_title(hwnd).unwrap_or_default();
         let tab = browser_name(&exe).and_then(|_| {
-            let url = self.url_of(hwnd)?;
+            let url = self.url_of(hwnd, &title)?;
             Some(TabRef {
                 // No tab ids exist on Windows, so the URL IS the identity --
                 // and every close re-reads it rather than trusting this copy.
                 id: format!("url:{url}"),
-                title: window_title(hwnd).unwrap_or_default(),
+                title: title.clone(),
                 url,
             })
         });
@@ -258,7 +286,8 @@ impl ActivityProbe for WinProbe {
         if browser_name(&exe).is_none() {
             return Ok(CloseOutcome::NoLongerMatching);
         }
-        let Some(now) = self.url_of(hwnd) else {
+        let title = window_title(hwnd).unwrap_or_default();
+        let Some(now) = self.url_of(hwnd, &title) else {
             return Ok(CloseOutcome::NoLongerMatching);
         };
         if !same_page(&now, &target.url) {
@@ -464,17 +493,16 @@ fn same_page(a: &str, b: &str) -> bool {
 
 /// The first value found under `root` for a given control type.
 fn first_value(ui: &UIAutomation, root: &UIElement, kind: ControlType) -> Option<String> {
-    // Depth matters more than it looks. The matcher walks only a few levels
-    // by default, and a Chromium document sits a long way down -- so a search
-    // that never reaches it is indistinguishable from a browser that has no
-    // address at all, which is exactly the wrong thing to be unable to tell
-    // apart.
+    // Ten levels: deep enough to reach a Chromium document, shallow enough to
+    // stay bounded. Every level multiplies the number of COM calls, and at
+    // sixteen a fruitless search took seconds rather than milliseconds -- long
+    // enough to stall the tick that charges the time.
     let el = ui
         .create_matcher()
         .from_ref(root)
         .control_type(kind)
-        .depth(16)
-        .timeout(400)
+        .depth(10)
+        .timeout(150)
         .find_first()
         .ok()?;
     let v = el.get_pattern::<UIValuePattern>().ok()?.get_value().ok()?;
