@@ -59,7 +59,7 @@ jobs:
           $chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
           if (-not (Test-Path $chrome)) { $chrome = "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" }
           Write-Host "chrome: $chrome  exists: $(Test-Path $chrome)"
-          Start-Process $chrome -ArgumentList '--no-first-run','--no-default-browser-check','--new-window','https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+          Start-Process $chrome -ArgumentList '--no-first-run','--no-default-browser-check','--hide-crash-restore-bubble','--new-window','https://www.youtube.com/watch?v=dQw4w9WgXcQ'
           Start-Sleep -Seconds 20
 
       - name: What the accessibility tree offers
@@ -88,12 +88,15 @@ jobs:
           .\target\release\focuskitty.exe add youtube.com 60 --mode foreground-only
           .\target\release\focuskitty.exe rules
 
-          $chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-          if (-not (Test-Path $chrome)) { $chrome = "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" }
-          Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force
-          Start-Sleep -Seconds 2
-          Start-Process $chrome -ArgumentList '--no-first-run','--new-window','https://www.youtube.com/watch?v=dQw4w9WgXcQ'
-          Start-Sleep -Seconds 10
+          # Chrome is ALREADY open on YouTube from the earlier step. Killing
+          # and relaunching it brings back a "Restore pages?" prompt instead
+          # of the page, which would fail this test for a reason that has
+          # nothing to do with the clock.
+
+          # What does the tracker see right now? If this is wrong, the timer
+          # result below means nothing.
+          Write-Host "--- what is in front before we start"
+          .\target\release\focuskitty.exe probe 3
 
           # Nothing touches the machine for the next 40 seconds. If the clock
           # only moves when something happens, it will show here as zero.
@@ -123,7 +126,7 @@ jobs:
           Start-Sleep -Seconds 3
           $chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
           if (-not (Test-Path $chrome)) { $chrome = "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" }
-          Start-Process $chrome -ArgumentList '--no-first-run','--force-renderer-accessibility','--new-window','https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+          Start-Process $chrome -ArgumentList '--no-first-run','--hide-crash-restore-bubble','--force-renderer-accessibility','--new-window','https://www.youtube.com/watch?v=dQw4w9WgXcQ'
           Start-Sleep -Seconds 20
           .\target\release\focuskitty.exe uia 12 chrome.exe
 
