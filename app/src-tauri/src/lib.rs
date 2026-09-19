@@ -477,13 +477,54 @@ fn toggle_popover(app: &AppHandle, near: PhysicalPosition<f64>) {
 /// validation for missing runtime symbols.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
-        )
-        .with_target(false)
-        .init();
+    // To a FILE, not to stdout. A desktop app has no console attached -- on
+    // Windows there is not even one to attach to -- so everything written to
+    // stdout has been going nowhere. Three crashes were reported with no
+    // record of any of them, which is why they were diagnosed by guessing.
+    let log_path = fk_core::store::data_dir().join("focuskitty.log");
+    let _ = std::fs::create_dir_all(fk_core::store::data_dir());
+    {
+        let path = log_path.clone();
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "info".into()),
+            )
+            .with_target(false)
+            .with_ansi(false)
+            .with_writer(move || {
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                    .unwrap_or_else(|_| std::fs::File::create("focuskitty.log").unwrap())
+            })
+            .init();
+    }
+
+    // A panic in a background thread kills only that thread, silently: the
+    // clock would simply stop with nothing to show for it. Write it down.
+    {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let where_ = info
+                .location()
+                .map(|l| format!("{}:{}", l.file(), l.line()))
+                .unwrap_or_else(|| "unknown".into());
+            let what = info
+                .payload()
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| info.payload().downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panic".into());
+            tracing::error!(
+                "PANIC in {} at {where_}: {what}",
+                std::thread::current().name().unwrap_or("unnamed")
+            );
+            previous(info);
+        }));
+    }
+    tracing::info!("FocusKitty starting; log at {}", log_path.display());
 
     // Android dictates where an app may write, so the store must be told
     // before anything tries to load a config from the wrong place.
@@ -976,7 +1017,6 @@ fn spawn_tick(app: AppHandle, state: Arc<AppState>) {
         // until the user touched something and woke the loop, which looked
         // exactly like the timer only counting while being watched.
         let work = move || {
-            with_probe(|probe| tracking::tick(&state, probe));
             with_probe(|probe| tracking::tick(&state, probe));
             // A close is the app's whole point. Play the swipe now and shut
             // the tab on its impact frame, so the gesture and the consequence
