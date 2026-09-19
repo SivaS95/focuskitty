@@ -193,10 +193,11 @@ impl ActivityProbe for WinProbe {
     fn current(&self) -> Option<Activity> {
         let (hwnd, _pid, exe) = self.front()?;
 
-        // Our own windows are not "what you are doing".
-        if exe.eq_ignore_ascii_case("focuskitty.exe") {
-            return None;
-        }
+        // Our own windows ARE reported, deliberately. The tracker needs to
+        // know the difference between "FocusKitty is in front" -- keep
+        // remembering what they were doing, they only opened the controls --
+        // and "nothing readable is in front", which means idle. Answering
+        // None for both collapses that distinction and loses the memory.
 
         let tab = browser_name(&exe).and_then(|_| {
             let url = self.url_of(hwnd)?;

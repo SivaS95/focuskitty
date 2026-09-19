@@ -47,6 +47,17 @@ const ANGRY_FOR: i64 = 8;
 
 /// Our own bundle id. Time spent in FocusKitty's own windows is not screen time
 /// worth policing, and counting it would make the popover itself a distraction.
+/// How FocusKitty appears to its OWN probe.
+///
+/// macOS and Android answer with a bundle/package id; Windows answers with an
+/// executable name. Getting this wrong is silent and total: `is_self` never
+/// matches, so the moment you click the cat -- which gives the popover focus
+/// -- the tick takes the "you switched to something new" branch and forgets
+/// what you were actually looking at. "Watch this" then has nothing to offer,
+/// which is precisely what it did on Windows.
+#[cfg(target_os = "windows")]
+const SELF_BUNDLE: &str = "focuskitty.exe";
+#[cfg(not(target_os = "windows"))]
 const SELF_BUNDLE: &str = "com.siva.focuskitty";
 
 /// How long a line stays in the cat's bubble.
