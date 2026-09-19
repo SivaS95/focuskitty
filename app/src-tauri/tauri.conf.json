@@ -59,7 +59,6 @@
   },
   "bundle": {
     "active": true,
-    "_targets_comment": "all, not a list: dmg and app are macOS-only, and naming them explicitly meant the Windows build compiled the binary and then bundled nothing at all -- while still reporting success.",
     "targets": "all",
     "icon": [
       "icons/32x32.png",
