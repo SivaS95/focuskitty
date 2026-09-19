@@ -66,7 +66,20 @@ fn main() -> Result<()> {
         #[cfg(target_os = "windows")]
         "uia" => {
             let depth = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(8);
-            println!("{}", fk_probe_windows::dump_front_window(depth)?);
+            // The dump is of whatever is IN FRONT -- which, run from a
+            // terminal, is the terminal. Counting down first is the whole
+            // difference between a dump of Chrome and a dump of PowerShell.
+            for n in (1..=6).rev() {
+                println!("switch to the window you want dumped... {n}");
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+            let tree = fk_probe_windows::dump_front_window(depth)?;
+            println!("{tree}");
+            // Also written to a file, because a long tree scrolls out of the
+            // terminal's buffer and the interesting part is usually the top.
+            let path = std::env::current_dir()?.join("uia-dump.txt");
+            std::fs::write(&path, &tree)?;
+            println!("\n(also saved to {})", path.display());
             Ok(())
         }
         "tabs" => cmd_tabs(),
