@@ -209,6 +209,15 @@ fn watch_current(state: State<'_, Arc<AppState>>, minutes: u64) -> Option<String
         .config
         .sites
         .retain(|r| fk_core::domain::canonical(&r.domain) != domain);
+    // A limit set now means "from now". Time spent before the rule existed
+    // was not against any limit, and charging it retroactively made a fresh
+    // limit read "over" the moment it was set -- which is how it behaved all
+    // day, and why every instruction to test began with "find a site you have
+    // not visited yet".
+    //
+    // Editing an existing limit does NOT do this: the stepper must not become
+    // a way to buy more time.
+    tracker.state.remove(&fk_core::rules::TargetKey::site(&domain));
     tracker.config.sites.push(SiteRule {
         domain: domain.clone(),
         daily_limit_secs: minutes * 60,
@@ -237,6 +246,8 @@ fn watch_current_app(state: State<'_, Arc<AppState>>, minutes: u64) -> Option<St
         .config
         .apps
         .retain(|r| !r.app_id.eq_ignore_ascii_case(&activity.app_id));
+    // Set now means from now -- see add_site.
+    tracker.state.remove(&fk_core::rules::TargetKey::app(&activity.app_id));
     tracker.config.apps.push(fk_core::rules::AppRule {
         app_id: activity.app_id.clone(),
         app_name: activity.app_name.clone(),
@@ -313,6 +324,15 @@ fn add_site(state: State<'_, Arc<AppState>>, domain: String, minutes: u64, mode:
         .config
         .sites
         .retain(|r| fk_core::domain::canonical(&r.domain) != domain);
+    // A limit set now means "from now". Time spent before the rule existed
+    // was not against any limit, and charging it retroactively made a fresh
+    // limit read "over" the moment it was set -- which is how it behaved all
+    // day, and why every instruction to test began with "find a site you have
+    // not visited yet".
+    //
+    // Editing an existing limit does NOT do this: the stepper must not become
+    // a way to buy more time.
+    tracker.state.remove(&fk_core::rules::TargetKey::site(&domain));
     tracker.config.sites.push(SiteRule {
         domain,
         daily_limit_secs: minutes * 60,
@@ -351,6 +371,8 @@ fn add_app(state: State<'_, Arc<AppState>>, app_id: String, app_name: String, mi
     }
     let mut tracker = state.tracker.lock().unwrap();
     tracker.config.apps.retain(|r| !r.app_id.eq_ignore_ascii_case(&app_id));
+    // Set now means from now -- see add_site.
+    tracker.state.remove(&fk_core::rules::TargetKey::app(&app_id));
     tracker.config.apps.push(fk_core::rules::AppRule {
         app_id,
         app_name,

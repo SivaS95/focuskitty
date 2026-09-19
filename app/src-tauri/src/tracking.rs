@@ -636,6 +636,10 @@ pub fn tick(state: &AppState, probe: &dyn ActivityProbe) {
             .config
             .apps
             .retain(|r| !r.app_id.eq_ignore_ascii_case(&req.app_id));
+        // Set now means from now. Without this, watching an app on the phone
+        // charged it for everything it had already done today, so a fresh
+        // limit was over before the panel had finished redrawing.
+        tracker.state.remove(&TargetKey::app(&req.app_id));
         tracker.config.apps.push(fk_core::rules::AppRule {
             app_id: req.app_id.clone(),
             app_name: req.app_name.clone(),
