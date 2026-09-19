@@ -22,7 +22,8 @@
 
 #![cfg(target_os = "windows")]
 
-use std::cell::RefCell;
+use std::sync::mpsc::SyncSender;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Result};
 use fk_core::activity::{Activity, ActivityProbe, AppInfo, CloseOutcome, TabRect, TabRef};
@@ -75,39 +76,37 @@ fn browser_name(exe: &str) -> Option<&'static str> {
 }
 
 pub struct WinProbe {
-    /// Created once and reused. Building a UIAutomation is a COM activation;
-    /// doing it every tick would be the most expensive thing in the loop.
+    /// The last URL read, and the window it belongs to.
     ///
-    /// `RefCell` rather than a plain field because the trait hands out `&self`
-    /// and COM objects are not `Sync` -- which is exactly why `ActivityProbe`
-    /// is deliberately not `Send`/`Sync`.
-    automation: RefCell<Option<UIAutomation>>,
-    /// The last URL read, against the window and title it was read from.
+    /// Filled in by a worker thread, never by the caller. Reading a URL means
+    /// a cross-process COM call into the browser, and a browser with nothing
+    /// happening in it does not answer promptly -- an idle Chrome renderer can
+    /// leave that call outstanding for many seconds. There is no timeout to
+    /// set: it returns when the other program feels like answering.
     ///
-    /// Reading a URL means walking the accessibility tree, which is expensive
-    /// -- and on a browser that does not expose a Document it is expensive AND
-    /// fruitless, burning the search timeout twice a second for nothing. That
-    /// cost lands on the main thread, and a tick that arrives more than five
-    /// seconds late is charged ZERO, because that is how a closed lid is meant
-    /// to look. So a slow read does not merely lag: it stops the clock.
+    /// That cannot be allowed to happen on the thread keeping time. A tick
+    /// arriving more than five seconds late is charged ZERO, deliberately,
+    /// because that is how a closed lid looks -- so a browser that does not
+    /// answer would stop the clock. Which is exactly what it did: the timer
+    /// froze on an idle tab and started again the moment the window was
+    /// minimised and restored, because that woke the renderer and released
+    /// the call.
     ///
-    /// The title is the key because it is nearly free to read and it changes
-    /// on exactly the events that change the URL -- navigating, or switching
-    /// tabs. One search per page, instead of one per second.
-    cache: RefCell<Option<Cached>>,
+    /// So the clock reads this, and only this, and never waits.
+    latest: Arc<Mutex<Option<Reading>>>,
+    /// Requests to the reader. Bounded to one in flight; a full channel means
+    /// the reader is still busy, and the request is simply dropped.
+    ask: SyncSender<(isize, String)>,
 }
 
-/// What was last read, and what it cost.
-struct Cached {
+/// A URL, and the window and title it was read from.
+#[derive(Clone)]
+struct Reading {
     hwnd: isize,
     title: String,
     url: Option<String>,
-    at: std::time::Instant,
-    /// How long the read took. A slow window is not asked again soon: the
-    /// clock is charged from the gap between ticks, and a probe that blocks
-    /// is indistinguishable from a machine that was asleep.
-    cost: std::time::Duration,
 }
+
 
 impl Default for WinProbe {
     fn default() -> Self {
@@ -117,107 +116,69 @@ impl Default for WinProbe {
 
 impl WinProbe {
     pub fn new() -> Self {
-        Self { automation: RefCell::new(None), cache: RefCell::new(None) }
-    }
+        let latest: Arc<Mutex<Option<Reading>>> = Arc::new(Mutex::new(None));
+        // One slot. If the reader is still waiting on a browser, further
+        // requests are dropped rather than queued -- by the time it answers,
+        // an old request is answering a question nobody is asking any more.
+        let (ask, rx) = std::sync::mpsc::sync_channel::<(isize, String)>(1);
 
-    /// The automation client, built on first use.
-    ///
-    /// A failure here is not fatal: without UIA we still know which app is in
-    /// front, so app limits keep working and only site limits go quiet.
-    fn with_ui<T>(&self, f: impl FnOnce(&UIAutomation) -> Option<T>) -> Option<T> {
-        let mut slot = self.automation.borrow_mut();
-        if slot.is_none() {
-            match UIAutomation::new() {
-                Ok(ui) => *slot = Some(ui),
+        let store = latest.clone();
+        std::thread::spawn(move || {
+            // Its own automation client, on its own thread. COM wants a
+            // multi-threaded apartment, which a plain thread can give it and
+            // a GUI main thread cannot.
+            let ui = match UIAutomation::new() {
+                Ok(ui) => ui,
                 Err(e) => {
                     tracing::warn!("UI Automation unavailable ({e}); site limits will not count");
-                    return None;
+                    return;
                 }
+            };
+            while let Ok((hwnd, title)) = rx.recv() {
+                let url = read_url_with(&ui, HWND(hwnd as *mut std::ffi::c_void));
+                *store.lock().unwrap() = Some(Reading { hwnd, title, url });
             }
-        }
-        f(slot.as_ref()?)
+        });
+
+        Self { latest, ask }
     }
 
-    /// The URL showing in a browser window, read off its accessibility tree.
+    /// A client for the callers that may block: closing, and measuring where
+    /// a tab sits. Both run on the animation thread, which has nothing to do
+    /// but wait, so a slow browser there costs only the animation.
+    fn with_ui<T>(&self, f: impl FnOnce(&UIAutomation) -> Option<T>) -> Option<T> {
+        match UIAutomation::new() {
+            Ok(ui) => f(&ui),
+            Err(e) => {
+                tracing::warn!("UI Automation unavailable ({e})");
+                None
+            }
+        }
+    }
+
+    /// The URL of a browser window -- whatever the reader last managed to get.
     ///
-    /// Two routes, in order of trustworthiness:
-    ///
-    /// 1. The **Document** element's value. Chromium puts the real page URL
-    ///    there, which is what we want -- it is the address of what you are
-    ///    actually looking at.
-    /// 2. The address bar, an **Edit** control. Used only as a fallback,
-    ///    because it holds whatever is *typed*: mid-edit it is a half-written
-    ///    search, and while focused Chrome may hide the scheme entirely.
-    ///
-    /// Deliberately not matched on the control's name ("Address and search
-    /// bar"), which is localised -- that would work on an English Windows and
-    /// silently fail everywhere else.
+    /// NEVER waits. If the answer is stale, or missing, that is what comes
+    /// back, and a request goes out for next time. One second of a slightly
+    /// old address is a far smaller error than a stopped clock.
     fn url_of(&self, hwnd: HWND, title: &str) -> Option<String> {
         let key = hwnd.0 as isize;
+        let known = self.latest.lock().unwrap().clone();
 
-        // A title change is the signal that the page changed -- but it is not
-        // a reliable one. YouTube rewrites its title for a notification count,
-        // a live viewer number, a video advancing; each rewrite would trigger
-        // another full walk of the tree. That is what stalls the tick, and a
-        // stalled tick is charged ZERO, so the timer appears to stop while the
-        // user is sitting on exactly the page they asked to be timed.
-        //
-        // So the title only earns a re-read after a floor has passed, and a
-        // read that proved expensive earns a much longer one.
-        const FLOOR: std::time::Duration = std::time::Duration::from_secs(3);
-        const SLOW: std::time::Duration = std::time::Duration::from_millis(250);
-        const PENALTY: std::time::Duration = std::time::Duration::from_secs(30);
-
-        if let Some(c) = self.cache.borrow().as_ref() {
-            let wait = if c.cost > SLOW { PENALTY } else { FLOOR };
-            let fresh = c.at.elapsed() < wait;
-            if c.hwnd == key && (c.title == title || fresh) {
-                return c.url.clone();
+        match &known {
+            // Current: same window, same title. Nothing to ask.
+            Some(r) if r.hwnd == key && r.title == title => r.url.clone(),
+            // Stale or absent. Ask, and answer with what we have meanwhile --
+            // the same window's previous address is very likely still right.
+            _ => {
+                let _ = self.ask.try_send((key, title.to_string()));
+                known.filter(|r| r.hwnd == key).and_then(|r| r.url)
             }
         }
-
-        let started = std::time::Instant::now();
-        let found = self.read_url(hwnd);
-        let cost = started.elapsed();
-        if cost > SLOW {
-            tracing::warn!("reading the address took {cost:?}; backing off");
-        }
-        // Cached even when nothing was found: a browser that will not give up
-        // its address should be asked once per page, not once per second.
-        *self.cache.borrow_mut() = Some(Cached {
-            hwnd: key,
-            title: title.to_string(),
-            url: found.clone(),
-            at: std::time::Instant::now(),
-            cost,
-        });
-        found
     }
 
-    /// The URL showing in a browser window, read off its accessibility tree.
-    ///
-    /// Deliberately NOT a search for a particular control. The first version
-    /// looked for a Document element and then an address bar, which can only
-    /// work if a guess about how a given browser exposes itself is correct --
-    /// and when the guess is wrong the result is silence, indistinguishable
-    /// from a browser with no address at all. Chrome, Edge, Firefox and Brave
-    /// need not agree, and none of them owes us a stable tree.
-    ///
-    /// So: walk the window once and take the first value that LOOKS like a
-    /// URL, wherever it turns out to live. Whatever holds it -- the omnibox,
-    /// the document, something none of us has thought of -- it is found by
-    /// what it contains rather than by where it was expected to be.
-    ///
-    /// Bounded by depth and by a node budget, because this runs on the thread
-    /// that keeps time.
     fn read_url(&self, hwnd: HWND) -> Option<String> {
-        self.with_ui(|ui| {
-            let root = ui.element_from_handle(Handle::from(hwnd.0 as isize)).ok()?;
-            let walker = ui.get_control_view_walker().ok()?;
-            // Bounded hard: this runs on the thread that keeps time.
-            let mut budget = 200usize;
-            find_url(&walker, &root, 0, 8, &mut budget)
-        })
+        self.with_ui(|ui| read_url_with(ui, hwnd))
     }
 
     /// Which tab is selected, and how many there are.
@@ -343,8 +304,13 @@ impl ActivityProbe for WinProbe {
         if browser_name(&exe).is_none() {
             return Ok(CloseOutcome::NoLongerMatching);
         }
-        let title = window_title(hwnd).unwrap_or_default();
-        let Some(now) = self.url_of(hwnd, &title) else {
+        // Read it FRESH, and wait for the answer. `url_of` is deliberately
+        // non-blocking and may hand back a second-old address -- fine for
+        // counting time, wrong for deciding what to close. Ctrl+W goes
+        // wherever focus is, so a stale answer here means shutting a tab the
+        // user had already moved away from. This path runs on the animation
+        // thread, which has nothing to do but wait.
+        let Some(now) = self.read_url(hwnd) else {
             return Ok(CloseOutcome::NoLongerMatching);
         };
         if !same_page(&now, &target.url) {
@@ -604,6 +570,17 @@ fn same_page(a: &str, b: &str) -> bool {
         s.to_ascii_lowercase()
     }
     key(a) == key(b)
+}
+
+/// Walk a window and return the first thing that looks like a web address.
+///
+/// May block for as long as the browser takes to answer, so it belongs on the
+/// reader thread or the animation thread -- never on the clock.
+fn read_url_with(ui: &UIAutomation, hwnd: HWND) -> Option<String> {
+    let root = ui.element_from_handle(Handle::from(hwnd.0 as isize)).ok()?;
+    let walker = ui.get_control_view_walker().ok()?;
+    let mut budget = 200usize;
+    find_url(&walker, &root, 0, 8, &mut budget)
 }
 
 /// Depth-first hunt for something URL-shaped, anywhere under `el`.
