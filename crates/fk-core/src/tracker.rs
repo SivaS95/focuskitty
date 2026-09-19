@@ -23,6 +23,13 @@ const MAX_TICK_GAP_MS: i64 = 5_000;
 /// The cat warns again at one minute, whatever the configured lead is.
 const FINAL_WARN_SECS: u64 = 60;
 
+/// How long before something already over its limit is acted on again.
+///
+/// Long enough not to fight the user while the cat is still walking over and
+/// the tab is closing; short enough that reopening it is not a way around the
+/// limit.
+const RE_ENFORCE_SECS: i64 = 15;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// Put something in the thought bubble.
@@ -59,6 +66,13 @@ pub struct TargetState {
     pub grace_ms: u64,
     pub warned: BTreeSet<u64>,
     pub expired: bool,
+    /// When it ran out, as milliseconds since the epoch.
+    ///
+    /// Enforcement has to be able to happen MORE THAN ONCE: a tab that was
+    /// closed is one keystroke from being back. Without this the limit was
+    /// spent the first time it fired, and reopening the site cost nothing.
+    #[serde(default)]
+    pub expired_at_ms: Option<i64>,
     /// How long this site has been observed open but not in front.
     #[serde(default)]
     pub bg_open_ms: u64,
@@ -304,10 +318,23 @@ impl Tracker {
             let remaining = remaining_ms / 1000;
 
             if remaining_ms == 0 {
-                let already = self.state.get(&key).map(|s| s.expired).unwrap_or(false);
-                if !already {
+                let st_now = self.state.get(&key);
+                let already = st_now.map(|s| s.expired).unwrap_or(false);
+                // Act again if it has been over for a while and is STILL in
+                // front. A limit that fires once and then lets you carry on is
+                // not a limit -- closing a tab means nothing if reopening it
+                // is free. Only for what is actually in front, so a stray
+                // background tab is not hunted down again and again.
+                let due_again = already
+                    && Some(&key) == foreground.as_ref()
+                    && st_now
+                        .and_then(|s| s.expired_at_ms)
+                        .is_some_and(|at| now.timestamp_millis() - at >= RE_ENFORCE_SECS * 1000);
+
+                if !already || due_again {
                     if let Some(st) = self.state.get_mut(&key) {
                         st.expired = true;
+                        st.expired_at_ms = Some(now.timestamp_millis());
                     }
                     let tab = if Some(&key) == foreground.as_ref() {
                         activity.and_then(|a| a.tab.clone())

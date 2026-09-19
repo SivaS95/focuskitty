@@ -145,6 +145,52 @@ fn expiry_targets_the_tab_that_was_actually_in_front() {
     }
 }
 
+/// A limit that has run out must keep being enforced.
+///
+/// Reported from both platforms: the tab closed once, and after that opening
+/// the site again cost nothing -- "it says over, over, over. It doesn't do
+/// anything." Closing a tab means nothing if reopening it is free.
+#[test]
+fn a_spent_limit_is_enforced_again_when_you_come_back() {
+    let c = cfg(vec![site("github.com", 60, BackgroundMode::ForegroundOnly)]);
+    let mut tr = Tracker::new(c, t0());
+    let act = browsing("https://github.com/x", "1");
+
+    // Spend it. The limit is 60s, so it runs out around tick 60.
+    let mut first = 0;
+    for i in 0..65 {
+        for a in tr.tick(t0() + Duration::seconds(i), Some(&act), &[]) {
+            if matches!(a, Action::Expire { .. }) {
+                first += 1;
+            }
+        }
+    }
+    assert_eq!(first, 1, "it should fire exactly once while being spent");
+
+    // Five to twelve seconds after: still inside the cooling period, so
+    // nothing -- the cat is walking over and the tab is closing.
+    let mut again = 0;
+    for i in 65..72 {
+        for a in tr.tick(t0() + Duration::seconds(i), Some(&act), &[]) {
+            if matches!(a, Action::Expire { .. }) {
+                again += 1;
+            }
+        }
+    }
+    assert_eq!(again, 0, "it must not fire every second while the cat acts");
+
+    // Still there well past the cooling period: act again.
+    let mut later = 0;
+    for i in 72..95 {
+        for a in tr.tick(t0() + Duration::seconds(i), Some(&act), &[]) {
+            if matches!(a, Action::Expire { .. }) {
+                later += 1;
+            }
+        }
+    }
+    assert!(later >= 1, "coming back to a spent limit must be acted on again");
+}
+
 /// Raising a limit on something already over must restart its clock.
 ///
 /// Reported from Windows: a site that had run out showed "1m left" once the

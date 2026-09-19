@@ -250,12 +250,43 @@ impl ActivityProbe for MacProbe {
         })
     }
 
+    /// Hide an app through AppKit, not through System Events.
+    ///
+    /// The old route asked System Events to make the process invisible, which
+    /// needs Accessibility permission -- and the script swallowed the refusal
+    /// and answered "nomatch", so a denied permission looked exactly like an
+    /// app that had already gone. That permission is also tied to the app's
+    /// code signature, so it lapses on every rebuild of an unsigned build.
+    ///
+    /// `NSRunningApplication.hide()` is the API for this and needs no
+    /// permission at all. It also matches on the BUNDLE ID where it can, which
+    /// is stable, rather than on a display name that is localised.
     fn hide_app(&self, app_name: &str) -> Result<CloseOutcome> {
-        let v = self.call(Browser::System, "hideApp", vec![Value::String(app_name.into())])?;
-        Ok(match v.as_str() {
-            Some("hidden") => CloseOutcome::Closed,
-            _ => CloseOutcome::NoLongerMatching,
-        })
+        use objc2_app_kit::NSWorkspace;
+
+        let workspace = NSWorkspace::sharedWorkspace();
+        let hidden = workspace.runningApplications().iter().any(|app| {
+            let matches = app
+                .bundleIdentifier()
+                .is_some_and(|id| id.to_string().eq_ignore_ascii_case(app_name))
+                || app
+                    .localizedName()
+                    .is_some_and(|n| n.to_string().eq_ignore_ascii_case(app_name));
+            if matches {
+                // Already hidden counts as done: the limit wanted it off the
+                // screen, and it is off the screen.
+                if app.isHidden() {
+                    return true;
+                }
+                return app.hide();
+            }
+            false
+        });
+
+        if !hidden {
+            tracing::info!("hide refused: nothing running called {app_name:?}");
+        }
+        Ok(if hidden { CloseOutcome::Closed } else { CloseOutcome::NoLongerMatching })
     }
 
     fn active_tab_rect(&self) -> Option<TabRect> {

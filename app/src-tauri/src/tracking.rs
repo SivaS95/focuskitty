@@ -541,6 +541,9 @@ pub fn tick(state: &AppState, probe: &dyn ActivityProbe) {
                     // loses nothing, rather than the limit doing nothing at all.
                     None => {
                         // Match on the BUNDLE ID, which is what the key holds.
+                        // The bundle id, not the display name. Names are
+                        // localised and can differ from what the system calls
+                        // the process; the id is what the app IS.
                         let proc = {
                             let tracker = state.tracker.lock().unwrap();
                             match &key {
@@ -549,14 +552,13 @@ pub fn tick(state: &AppState, probe: &dyn ActivityProbe) {
                                     .apps
                                     .iter()
                                     .find(|r| r.app_id.eq_ignore_ascii_case(id))
-                                    .map(|r| r.app_name.clone()),
+                                    .map(|r| (r.app_name.clone(), r.app_id.clone())),
                                 _ => None,
                             }
                         };
                         match proc {
-                            Some(name) => {
-                                inner.pending_close =
-                                    Some(PendingClose::App(name.clone(), name));
+                            Some((name, id)) => {
+                                inner.pending_close = Some(PendingClose::App(name, id));
                             }
                             None => {
                                 inner.speak(format!("{label} is over its limit"));
