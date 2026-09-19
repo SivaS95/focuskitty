@@ -943,7 +943,21 @@ fn spawn_tick(app: AppHandle, state: Arc<AppState>) {
         std::thread::sleep(Duration::from_secs(1));
         let state = state.clone();
         let app2 = app.clone();
-        let _ = app.run_on_main_thread(move || {
+
+        // Where this runs is not a detail -- it is the difference between a
+        // clock and a stopwatch somebody has to keep tapping.
+        //
+        // `ActivityProbe` is not Send because of macOS: OSAScript is
+        // main-thread-only, so there the work must be marshalled onto the main
+        // thread. Windows has no such requirement, and marshalling there was
+        // actively harmful: the main thread is the window event loop, which
+        // sleeps until a message arrives. With nothing to deliver -- nobody
+        // clicking, no windows moving -- the posted work simply waited. The
+        // timer stopped, limits never expired, and nothing was ever closed,
+        // until the user touched something and woke the loop, which looked
+        // exactly like the timer only counting while being watched.
+        let work = move || {
+            with_probe(|probe| tracking::tick(&state, probe));
             with_probe(|probe| tracking::tick(&state, probe));
             // A close is the app's whole point. Play the swipe now and shut
             // the tab on its impact frame, so the gesture and the consequence
@@ -996,6 +1010,12 @@ fn spawn_tick(app: AppHandle, state: Arc<AppState>) {
             if let Err(e) = app2.emit("fk://snapshot", &snap) {
                 tracing::warn!("emitting snapshot: {e}");
             }
-        });
+        };
+
+        #[cfg(target_os = "macos")]
+        let _ = app.run_on_main_thread(work);
+        // Everywhere else, run it right here. This thread wakes on its own.
+        #[cfg(not(target_os = "macos"))]
+        work();
     });
 }

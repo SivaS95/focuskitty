@@ -94,7 +94,19 @@ pub struct WinProbe {
     /// The title is the key because it is nearly free to read and it changes
     /// on exactly the events that change the URL -- navigating, or switching
     /// tabs. One search per page, instead of one per second.
-    cache: RefCell<Option<(isize, String, Option<String>)>>,
+    cache: RefCell<Option<Cached>>,
+}
+
+/// What was last read, and what it cost.
+struct Cached {
+    hwnd: isize,
+    title: String,
+    url: Option<String>,
+    at: std::time::Instant,
+    /// How long the read took. A slow window is not asked again soon: the
+    /// clock is charged from the gap between ticks, and a probe that blocks
+    /// is indistinguishable from a machine that was asleep.
+    cost: std::time::Duration,
 }
 
 impl Default for WinProbe {
@@ -142,15 +154,43 @@ impl WinProbe {
     /// silently fail everywhere else.
     fn url_of(&self, hwnd: HWND, title: &str) -> Option<String> {
         let key = hwnd.0 as isize;
-        if let Some((k, t, url)) = self.cache.borrow().as_ref() {
-            if *k == key && t == title {
-                return url.clone();
+
+        // A title change is the signal that the page changed -- but it is not
+        // a reliable one. YouTube rewrites its title for a notification count,
+        // a live viewer number, a video advancing; each rewrite would trigger
+        // another full walk of the tree. That is what stalls the tick, and a
+        // stalled tick is charged ZERO, so the timer appears to stop while the
+        // user is sitting on exactly the page they asked to be timed.
+        //
+        // So the title only earns a re-read after a floor has passed, and a
+        // read that proved expensive earns a much longer one.
+        const FLOOR: std::time::Duration = std::time::Duration::from_secs(3);
+        const SLOW: std::time::Duration = std::time::Duration::from_millis(250);
+        const PENALTY: std::time::Duration = std::time::Duration::from_secs(30);
+
+        if let Some(c) = self.cache.borrow().as_ref() {
+            let wait = if c.cost > SLOW { PENALTY } else { FLOOR };
+            let fresh = c.at.elapsed() < wait;
+            if c.hwnd == key && (c.title == title || fresh) {
+                return c.url.clone();
             }
         }
+
+        let started = std::time::Instant::now();
         let found = self.read_url(hwnd);
+        let cost = started.elapsed();
+        if cost > SLOW {
+            tracing::warn!("reading the address took {cost:?}; backing off");
+        }
         // Cached even when nothing was found: a browser that will not give up
         // its address should be asked once per page, not once per second.
-        *self.cache.borrow_mut() = Some((key, title.to_string(), found.clone()));
+        *self.cache.borrow_mut() = Some(Cached {
+            hwnd: key,
+            title: title.to_string(),
+            url: found.clone(),
+            at: std::time::Instant::now(),
+            cost,
+        });
         found
     }
 
@@ -174,8 +214,9 @@ impl WinProbe {
         self.with_ui(|ui| {
             let root = ui.element_from_handle(Handle::from(hwnd.0 as isize)).ok()?;
             let walker = ui.get_control_view_walker().ok()?;
-            let mut budget = 500usize;
-            find_url(&walker, &root, 0, 10, &mut budget)
+            // Bounded hard: this runs on the thread that keeps time.
+            let mut budget = 200usize;
+            find_url(&walker, &root, 0, 8, &mut budget)
         })
     }
 

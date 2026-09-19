@@ -66,6 +66,22 @@ jobs:
         shell: pwsh
         run: .\target\release\focuskitty.exe uia 12 chrome.exe
 
+      # The tree dump proves the address is READABLE. This proves what the
+      # app's own code path actually returns -- current(), cache, predicate
+      # and all -- which is the thing that has been answering "Google Chrome"
+      # where it should answer "youtube.com".
+      - name: What the tracker itself sees
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath .\target\release\focuskitty.exe -ArgumentList 'probe' `
+                 -RedirectStandardOutput probe.log -RedirectStandardError probe.err -PassThru -NoNewWindow
+          Start-Sleep -Seconds 12
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Write-Host "--- stdout"
+          Get-Content probe.log -TotalCount 20 -ErrorAction SilentlyContinue
+          Write-Host "--- stderr"
+          Get-Content probe.err -TotalCount 20 -ErrorAction SilentlyContinue
+
       # And again with accessibility forced on, to find out whether that is
       # the difference between a readable address and silence.
       - name: Again, with renderer accessibility forced
