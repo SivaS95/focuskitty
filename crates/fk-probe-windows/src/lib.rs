@@ -311,11 +311,24 @@ impl ActivityProbe for WinProbe {
         // user had already moved away from. This path runs on the animation
         // thread, which has nothing to do but wait.
         let Some(now) = self.read_url(hwnd) else {
+            tracing::info!("close refused: could not read the address");
             return Ok(CloseOutcome::NoLongerMatching);
         };
-        if !same_page(&now, &target.url) {
+        // The SITE, not the exact page -- which is what macOS has always
+        // checked ("does the URL still match this domain"). Demanding the
+        // identical URL made this refuse almost every time on a site worth
+        // limiting: YouTube rewrites its address on every click, so between
+        // the limit expiring and the cat walking over, the page has moved on.
+        // The cat swiped and nothing closed.
+        //
+        // The question this guard exists to answer is "am I still shutting
+        // the thing I was asked to shut", and the answer is the domain.
+        let want = fk_core::domain::normalize(&target.url);
+        if want.is_empty() || !fk_core::domain::matches_domain(&now, &want) {
+            tracing::info!("close refused: now on {now:?}, was asked to close {want:?}");
             return Ok(CloseOutcome::NoLongerMatching);
         }
+        tracing::info!("closing {want}: still on {now}");
 
         send_ctrl_w()?;
         Ok(CloseOutcome::Closed)
@@ -556,22 +569,6 @@ fn looks_like_url(s: &str) -> bool {
         && name.chars().any(|c| c.is_ascii_alphanumeric())
 }
 
-/// Is this the same page, allowing for the browser's own tidying?
-///
-/// Chromium hides "https://" and a leading "www." in the address bar and puts
-/// them back when the page is read from the Document element, so the two
-/// routes can describe one page two ways. Comparing the normalised host and
-/// path keeps that from reading as "the user navigated away".
-fn same_page(a: &str, b: &str) -> bool {
-    fn key(s: &str) -> String {
-        let s = s.trim().trim_end_matches('/');
-        let s = s.split_once("://").map(|(_, r)| r).unwrap_or(s);
-        let s = s.strip_prefix("www.").unwrap_or(s);
-        s.to_ascii_lowercase()
-    }
-    key(a) == key(b)
-}
-
 /// Walk a window and return the first thing that looks like a web address.
 ///
 /// May block for as long as the browser takes to answer, so it belongs on the
@@ -699,12 +696,24 @@ pub fn dump_window(max_depth: usize, exe: Option<&str>) -> Result<String> {
 mod tests {
     use super::*;
 
+    /// The close re-check is about the SITE, not the page.
+    ///
+    /// Demanding the identical URL made closing refuse almost every time on
+    /// the sites people actually limit: YouTube rewrites its address on every
+    /// click, so it had always moved on by the time the cat got there.
     #[test]
-    fn a_tidied_address_bar_is_still_the_same_page() {
-        // What the Document element says vs what the address bar shows.
-        assert!(same_page("https://www.youtube.com/feed", "youtube.com/feed"));
-        assert!(same_page("https://example.com/", "https://example.com"));
-        assert!(!same_page("https://youtube.com/a", "https://youtube.com/b"));
+    fn the_close_check_follows_the_site_not_the_page() {
+        let want = fk_core::domain::normalize("https://www.youtube.com/watch?v=aaa");
+        assert_eq!(want, "youtube.com");
+
+        // Navigated within the site: still the thing we were asked to close.
+        assert!(fk_core::domain::matches_domain("https://www.youtube.com/watch?v=zzz", &want));
+        assert!(fk_core::domain::matches_domain("https://m.youtube.com/feed", &want));
+        assert!(fk_core::domain::matches_domain("youtube.com/results?q=x", &want));
+
+        // Genuinely somewhere else: leave it alone.
+        assert!(!fk_core::domain::matches_domain("https://github.com/x", &want));
+        assert!(!fk_core::domain::matches_domain("https://notyoutube.com/", &want));
     }
 
     #[test]
