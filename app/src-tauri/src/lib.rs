@@ -650,6 +650,55 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 /// gives us the window bounds and which tab is active, which is enough to
 /// reconstruct roughly where the tab sits -- strikes it, and returns.
 #[cfg(desktop)]
+/// A walk across the screen, for no reason but its own.
+///
+/// The same gait `go_and_swipe` uses to reach a tab, with nothing at the end
+/// of it. Deliberately a real distance: a cat that shuffles two steps and
+/// stops reads as a glitch, one that crosses the desk reads as an animal.
+#[cfg(desktop)]
+fn stroll(app: AppHandle, frac: f64) {
+    use tauri::LogicalPosition;
+
+    let Some(cat) = app.get_webview_window("cat") else { return };
+    let Ok(pos) = cat.outer_position() else { return };
+    let scale = cat.scale_factor().unwrap_or(2.0);
+    let from = LogicalPosition::new(pos.x as f64 / scale, pos.y as f64 / scale);
+
+    let Ok(Some(mon)) = cat.current_monitor() else { return };
+    let width = mon.size().width as f64 / scale;
+    let cat_w = cat.outer_size().map(|s| s.width as f64 / scale).unwrap_or(170.0);
+    let to_x = (frac * (width - cat_w)).clamp(0.0, width - cat_w);
+
+    // Not worth the trip. Crossing less than a fifth of the screen looks like
+    // a twitch rather than a decision.
+    if (to_x - from.x).abs() < width * 0.2 {
+        return;
+    }
+
+    std::thread::spawn(move || {
+        let _ = app.emit("fk://busy", true);
+        let _ = app.emit("fk://face", if to_x >= from.x { 1 } else { -1 });
+        std::thread::sleep(Duration::from_millis(260)); // let it turn first
+        let _ = app.emit("fk://do", "walk");
+
+        let dist = (to_x - from.x).abs();
+        let steps = ((dist * 2.6) as u64 / 16).clamp(40, 420);
+        for i in 1..=steps {
+            let t = i as f64 / steps as f64;
+            // Ease in and out, so it sets off and arrives like something with
+            // weight rather than starting at full speed.
+            let e = t * t * (3.0 - 2.0 * t);
+            let _ = cat.set_position(LogicalPosition::new(
+                from.x + (to_x - from.x) * e,
+                from.y,
+            ));
+            std::thread::sleep(Duration::from_millis(16));
+        }
+        let _ = app.emit("fk://do", "sit");
+        let _ = app.emit("fk://busy", false);
+    });
+}
+
 fn go_and_swipe(
     app: AppHandle,
     state: Arc<AppState>,
@@ -870,6 +919,32 @@ fn spawn_tick(app: AppHandle, state: Arc<AppState>) {
             // A close is the app's whole point. Play the swipe now and shut
             // the tab on its impact frame, so the gesture and the consequence
             // are the same event rather than two unrelated ones.
+            // A walk the cat decided to take on its own. Taken before the
+            // close, and skipped if a close is waiting: the two would fight
+            // over the same window position.
+            #[cfg(desktop)]
+            {
+                // Not while the controls are open -- the cat would walk out
+                // from under the panel you are using -- and not while a close
+                // is queued, since the two would fight over the position.
+                let busy = app2
+                    .get_webview_window("popover")
+                    .and_then(|p| p.is_visible().ok())
+                    .unwrap_or(false);
+                let wander = {
+                    let mut inner = state.inner.lock().unwrap();
+                    if inner.pending_close.is_some() || busy {
+                        inner.pending_wander = None;
+                        None
+                    } else {
+                        inner.pending_wander.take()
+                    }
+                };
+                if let Some(frac) = wander {
+                    stroll(app2.clone(), frac);
+                }
+            }
+
             let pending = state.inner.lock().unwrap().pending_close.take();
             #[cfg(desktop)]
             if let Some(job) = pending {

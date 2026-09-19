@@ -38,9 +38,22 @@ pub enum PendingClose {
 }
 
 /// Idle this long and the cat finds something else to do.
-const IDLE_AFTER: u64 = 75;
-/// How long it sticks with each activity before moving on.
-const IDLE_SPELL: u64 = 120;
+const IDLE_AFTER: u64 = 40;
+
+/// What the cat does with its own time, and for how long (seconds, min..max).
+///
+/// Ordered by nothing: the next one is drawn at random, so the cat does not
+/// march through a fixed programme. Sleep is in here like any other activity,
+/// which is what makes it wake up again -- before, sleep was the last slot and
+/// the cat stayed there until you came back.
+const IDLE_ACTS: &[(&str, u64, u64)] = &[
+    ("bored", 18, 40),
+    ("read", 50, 110),
+    ("eat", 20, 40),
+    ("sleep", 70, 150),
+    ("sit", 15, 35),
+    ("wander", 8, 8),
+];
 
 /// How long the cat stays cross after closing something.
 const ANGRY_FOR: i64 = 8;
@@ -109,8 +122,13 @@ pub struct Inner {
     pub pending_close: Option<PendingClose>,
     /// Last thing logged, so the change-log does not repeat itself.
     pub last_logged: Option<String>,
-    /// Seconds with nothing watched in front; the cat gets bored.
+    /// Seconds with nothing WATCHED in front; the cat gets on with its day.
     pub idle_for: u64,
+    /// What it is currently doing with that time, and the tick it ends on.
+    pub idle_act: Option<String>,
+    pub idle_until: u64,
+    /// A walk the host should take the cat on: how far across the screen, 0..1.
+    pub pending_wander: Option<f64>,
     /// When the cat last said something, so a line clears itself instead of
     /// hanging over the cat an hour after it mattered.
     pub said_at: Option<DateTime<Local>>,
@@ -154,6 +172,21 @@ pub struct Snapshot {
     /// What "watch this" would add right now, and whether it is an app.
     pub target_label: Option<String>,
     pub target_is_app: bool,
+}
+
+/// Enough randomness to stop the cat being predictable, without a dependency.
+fn roll(range: std::ops::Range<u64>) -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let mut x = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64 ^ d.as_secs())
+        .unwrap_or(0x2545F4914F6CDD1D)
+        | 1;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    let span = range.end.saturating_sub(range.start).max(1);
+    range.start + x % span
 }
 
 impl Inner {
@@ -285,14 +318,12 @@ impl AppState {
             "angry"
         } else if inner.warning {
             "confront"
-        } else if inner.idle_for > IDLE_AFTER {
-            // With nothing to watch, the cat gets on with its own day. The
-            // slot is derived from how long it has been idle rather than
-            // rolled each tick, so it settles into an activity instead of
-            // flickering between them.
-            const ACTS: [&str; 3] = ["bored", "read", "eat"];
-            let slot = ((inner.idle_for - IDLE_AFTER) / IDLE_SPELL) as usize;
-            if slot >= ACTS.len() { "sleep" } else { ACTS[slot] }
+        } else if let Some(act) = inner.idle_act.as_deref() {
+            // Whatever it chose to do with its own time. Held for the length
+            // the tick decided, so it settles into an activity instead of
+            // flickering between them -- and "wander" is a walk, which the
+            // host performs; the animal itself walks.
+            if act == "wander" { "walk" } else { act }
         } else {
             "sit"
         };
@@ -410,7 +441,52 @@ pub fn tick(state: &AppState, probe: &dyn ActivityProbe) {
     });
     let enforcing = !inner.paused_until.is_some_and(|t| t > now);
     inner.warning = false;
-    if inner.current_label.is_some() { inner.idle_for = 0; } else { inner.idle_for += 1; }
+    // Idle means "nothing I am WATCHING is in front" -- not "the screen is
+    // empty". That distinction is the whole difference between a cat with a
+    // life and a cat that sits still forever: something is almost always in
+    // front of you, so the old test left the entire repertoire unreachable.
+    let watching_now = inner.current_label.as_ref().is_some_and(|label| {
+        let tracker = state.tracker.lock().unwrap();
+        tracker
+            .config
+            .sites
+            .iter()
+            .any(|r| r.enabled && r.domain.eq_ignore_ascii_case(label))
+            || tracker
+                .config
+                .apps
+                .iter()
+                .any(|r| r.enabled && (r.app_name.eq_ignore_ascii_case(label)
+                    || r.app_id.eq_ignore_ascii_case(label)))
+    });
+    if watching_now {
+        inner.idle_for = 0;
+        inner.idle_act = None;
+        inner.idle_until = 0;
+    } else {
+        inner.idle_for += 1;
+    }
+
+    // Pick the next thing to do, whenever the last one has run its course.
+    if inner.idle_for > IDLE_AFTER && !inner.sleeping && inner.tick_count >= inner.idle_until {
+        let last = inner.idle_act.clone();
+        // Never the same thing twice running -- that is what "stuck in bored
+        // for ten minutes" looked like.
+        let mut pick = IDLE_ACTS[roll(0..IDLE_ACTS.len() as u64) as usize];
+        if Some(pick.0.to_string()) == last {
+            let i = (IDLE_ACTS.iter().position(|a| a.0 == pick.0).unwrap_or(0) + 1) % IDLE_ACTS.len();
+            pick = IDLE_ACTS[i];
+        }
+        let (name, lo, hi) = pick;
+        inner.idle_act = Some(name.to_string());
+        inner.idle_until = inner.tick_count + roll(lo..hi + 1);
+        if name == "wander" {
+            // Somewhere well across the screen. A two-step shuffle reads as a
+            // glitch; a cat crossing the desk reads as a cat.
+            inner.pending_wander = Some(roll(5..96) as f64 / 100.0);
+        }
+        tracing::debug!("idle -> {name} until tick {}", inner.idle_until);
+    }
 
     for action in actions {
         match action {
