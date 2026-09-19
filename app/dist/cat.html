@@ -116,7 +116,12 @@ const MANUAL_HOLD = 12000;
 // While the cat is off doing something deliberate, its own idle facing logic
 // must not fight the direction it is being sent in.
 let busy = false;
-listen("fk://busy", (e) => { busy = !!e.payload; });
+listen("fk://busy", (e) => {
+  busy = !!e.payload;
+  // While the host walks the window, the rig must not also walk the cat
+  // inside it -- that is what made it turn round halfway across the screen.
+  cat.driven = busy;
+});
 listen("fk://face", (e) => {
   const want = e.payload;
   if (want !== cat.dir) cat.turnAround();
@@ -135,7 +140,9 @@ listen("fk://snapshot", (e) => {
   if (manual) { manualUntil = Date.now() + MANUAL_HOLD; manual = null; }
   const held = Date.now() < manualUntil;
 
-  if (!held && s.pose && s.pose !== cat.poseName && !cat.dragging) cat.setPose(s.pose);
+  // Not while the host is driving a walk or a pounce: a snapshot arriving
+  // mid-stride would drop the cat out of its gait and into a sit.
+  if (!busy && !held && s.pose && s.pose !== cat.poseName && !cat.dragging) cat.setPose(s.pose);
 
   if (s.say && s.say !== lastSay) { lastSay = s.say; cat.say(s.say, 5200); }
   if (!s.say) lastSay = null;

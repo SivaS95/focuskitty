@@ -650,11 +650,17 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 /// gives us the window bounds and which tab is active, which is enough to
 /// reconstruct roughly where the tab sits -- strikes it, and returns.
 #[cfg(desktop)]
-/// A walk across the screen, for no reason but its own.
+/// A few lengths of the screen, then settle.
 ///
-/// The same gait `go_and_swipe` uses to reach a tab, with nothing at the end
-/// of it. Deliberately a real distance: a cat that shuffles two steps and
-/// stops reads as a glitch, one that crosses the desk reads as an animal.
+/// A cat does not cross a room once and stop. It goes back and forth at a
+/// brisk trot a handful of times and then decides it is done, sits down, and
+/// gets on with something else -- so this walks two to four legs, alternating
+/// direction, and leaves the settling to whatever the tracker picks next.
+///
+/// The rig walks ON THE SPOT throughout (`driven`), because the overlay window
+/// is only ~340 wide: left to its own devices the rig travels about 30 pixels,
+/// hits its own edge and turns round, which halfway across the desk reads as
+/// the cat walking backwards.
 #[cfg(desktop)]
 fn stroll(app: AppHandle, frac: f64) {
     use tauri::LogicalPosition;
@@ -662,38 +668,61 @@ fn stroll(app: AppHandle, frac: f64) {
     let Some(cat) = app.get_webview_window("cat") else { return };
     let Ok(pos) = cat.outer_position() else { return };
     let scale = cat.scale_factor().unwrap_or(2.0);
-    let from = LogicalPosition::new(pos.x as f64 / scale, pos.y as f64 / scale);
+    let start = LogicalPosition::new(pos.x as f64 / scale, pos.y as f64 / scale);
 
     let Ok(Some(mon)) = cat.current_monitor() else { return };
     let width = mon.size().width as f64 / scale;
     let cat_w = cat.outer_size().map(|s| s.width as f64 / scale).unwrap_or(170.0);
-    let to_x = (frac * (width - cat_w)).clamp(0.0, width - cat_w);
+    let span = (width - cat_w).max(1.0);
 
-    // Not worth the trip. Crossing less than a fifth of the screen looks like
-    // a twitch rather than a decision.
-    if (to_x - from.x).abs() < width * 0.2 {
-        return;
-    }
+    // Where the legs turn: near each edge, but not pinned to it.
+    let left = span * 0.04;
+    let right = span * 0.94;
+    let legs = 2 + (frac * 3.0) as u32; // 2..4, from the same roll that chose the walk
 
     std::thread::spawn(move || {
         let _ = app.emit("fk://busy", true);
-        let _ = app.emit("fk://face", if to_x >= from.x { 1 } else { -1 });
-        std::thread::sleep(Duration::from_millis(260)); // let it turn first
-        let _ = app.emit("fk://do", "walk");
+        let mut from = start;
 
-        let dist = (to_x - from.x).abs();
-        let steps = ((dist * 2.6) as u64 / 16).clamp(40, 420);
-        for i in 1..=steps {
-            let t = i as f64 / steps as f64;
-            // Ease in and out, so it sets off and arrives like something with
-            // weight rather than starting at full speed.
-            let e = t * t * (3.0 - 2.0 * t);
-            let _ = cat.set_position(LogicalPosition::new(
-                from.x + (to_x - from.x) * e,
-                from.y,
-            ));
-            std::thread::sleep(Duration::from_millis(16));
+        for leg in 0..legs {
+            // Head for whichever end is further away, then alternate.
+            let to_x = if (leg == 0 && from.x > span / 2.0) || leg % 2 == 1 { left } else { right };
+            let dist = (to_x - from.x).abs();
+            if dist < span * 0.15 {
+                continue;
+            }
+
+            let _ = app.emit("fk://face", if to_x >= from.x { 1 } else { -1 });
+            std::thread::sleep(Duration::from_millis(280)); // let it turn first
+            let _ = app.emit("fk://do", "walk");
+
+            // A trot, not a stroll: about 420 points a second.
+            let steps = ((dist / 6.7) as u64).clamp(30, 300);
+            for i in 1..=steps {
+                let t = i as f64 / steps as f64;
+                // Eased only at the very ends of a leg, so the middle of the
+                // walk holds a steady pace instead of drifting.
+                let e = if t < 0.15 {
+                    let u = t / 0.15;
+                    0.15 * u * u
+                } else if t > 0.85 {
+                    let u = (1.0 - t) / 0.15;
+                    1.0 - 0.15 * u * u
+                } else {
+                    t
+                };
+                let _ = cat.set_position(LogicalPosition::new(
+                    from.x + (to_x - from.x) * e,
+                    from.y,
+                ));
+                std::thread::sleep(Duration::from_millis(16));
+            }
+            from = LogicalPosition::new(to_x, from.y);
+            // A breath at the turn, the way an animal checks before doubling back.
+            let _ = app.emit("fk://do", "sit");
+            std::thread::sleep(Duration::from_millis(340));
         }
+
         let _ = app.emit("fk://do", "sit");
         let _ = app.emit("fk://busy", false);
     });

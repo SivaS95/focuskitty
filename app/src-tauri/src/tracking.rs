@@ -52,7 +52,8 @@ const IDLE_ACTS: &[(&str, u64, u64)] = &[
     ("eat", 20, 40),
     ("sleep", 70, 150),
     ("sit", 15, 35),
-    ("wander", 8, 8),
+    // Long enough for the whole back-and-forth burst the host performs.
+    ("wander", 20, 30),
 ];
 
 /// How long the cat stays cross after closing something.

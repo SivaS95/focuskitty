@@ -653,6 +653,10 @@ class Cat {
     this.facingStretch = 1;
     this.turning = false;
     this.dragging = false;
+    /// True while something outside the rig is carrying the cat across the
+    /// screen. The rig then walks on the spot and lets the host do the
+    /// travelling -- see the locomotion block for why that matters.
+    this.driven = false;
     this.blink = { t: -1, dur: 0.16, queued: 0 };
     this.action = null;
     this.gaze = { x: 0, y: 0 };
@@ -1061,8 +1065,15 @@ class Cat {
 
     // Travel, and turn around at the edges. The cat art is 280 wide, so that
     // is what has to fit -- subtracting a guessed 200 let it walk off-screen.
+    //
+    // NOT while something else is carrying the cat. The overlay window is only
+    // ~340 wide, so this span is about 30 pixels: left to itself the rig walks
+    // that far, hits its own edge and turns round -- roughly every second and a
+    // half. With the host moving the window at the same time the cat sets off
+    // across the desk and then, halfway, walks backwards. On the spot is the
+    // correct gait for an animal being carried somewhere.
     const span = (this.mount.clientWidth - 280) / 2;
-    if (span > 6 && !this.dragging) {
+    if (span > 6 && !this.dragging && !this.driven) {
       this.x += this.dir * dt * 38;
       if (this.x > span) { this.x = span; this.turnAround(); }
       if (this.x < -span) { this.x = -span; this.turnAround(); }
