@@ -153,14 +153,16 @@ impl WinProbe {
                 .create_matcher()
                 .from_ref(&root)
                 .control_type(ControlType::Tab)
-                .timeout(200)
+                .depth(16)
+                .timeout(400)
                 .find_first()
                 .ok()?;
             let tabs = ui
                 .create_matcher()
                 .from_ref(&strip)
                 .control_type(ControlType::TabItem)
-                .timeout(200)
+                .depth(16)
+                .timeout(400)
                 .find_all()
                 .ok()?;
             if tabs.is_empty() {
@@ -461,16 +463,83 @@ fn same_page(a: &str, b: &str) -> bool {
 
 /// The first value found under `root` for a given control type.
 fn first_value(ui: &UIAutomation, root: &UIElement, kind: ControlType) -> Option<String> {
+    // Depth matters more than it looks. The matcher walks only a few levels
+    // by default, and a Chromium document sits a long way down -- so a search
+    // that never reaches it is indistinguishable from a browser that has no
+    // address at all, which is exactly the wrong thing to be unable to tell
+    // apart.
     let el = ui
         .create_matcher()
         .from_ref(root)
         .control_type(kind)
-        .timeout(200)
+        .depth(16)
+        .timeout(400)
         .find_first()
         .ok()?;
     let v = el.get_pattern::<UIValuePattern>().ok()?.get_value().ok()?;
     let v = v.trim().to_string();
     (!v.is_empty()).then_some(v)
+}
+
+/// Print the accessibility tree of whatever is in front, for diagnosis.
+///
+/// Reading a URL out of a browser on Windows is a guess until it runs on a
+/// real machine with a real browser, and "no URL" has several possible causes
+/// that look identical from the outside: the element is deeper than the search
+/// went, the browser has not built its accessibility tree yet, or the value is
+/// on a pattern we are not asking for. One dump distinguishes them, and saves
+/// a round of guessing per attempt.
+pub fn dump_front_window(max_depth: usize) -> Result<String> {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.is_invalid() {
+        return Err(anyhow!("nothing is in front"));
+    }
+    let exe = pid_of(hwnd).and_then(exe_of).unwrap_or_default();
+    let ui = UIAutomation::new().map_err(|e| anyhow!("no UI Automation: {e}"))?;
+    let root = ui
+        .element_from_handle(Handle::from(hwnd.0 as isize))
+        .map_err(|e| anyhow!("element_from_handle failed: {e}"))?;
+    let walker = ui.get_control_view_walker().map_err(|e| anyhow!("{e}"))?;
+
+    let mut out = format!("front: {exe}  title: {:?}\n", window_title(hwnd));
+    fn walk(
+        w: &uiautomation::UITreeWalker,
+        el: &UIElement,
+        depth: usize,
+        max: usize,
+        out: &mut String,
+    ) {
+        if depth > max {
+            return;
+        }
+        let kind = el.get_control_type().map(|c| format!("{c:?}")).unwrap_or_default();
+        let name = el.get_name().unwrap_or_default();
+        let value = el
+            .get_pattern::<UIValuePattern>()
+            .ok()
+            .and_then(|p| p.get_value().ok())
+            .unwrap_or_default();
+        let name = if name.len() > 60 { format!("{}...", &name[..60]) } else { name };
+        let value = if value.len() > 90 { format!("{}...", &value[..90]) } else { value };
+        out.push_str(&format!(
+            "{:indent$}{kind} name={name:?}{}\n",
+            "",
+            if value.is_empty() { String::new() } else { format!(" VALUE={value:?}") },
+            indent = depth * 2
+        ));
+        if let Ok(child) = w.get_first_child(el) {
+            let mut cur = child;
+            for _ in 0..40 {
+                walk(w, &cur, depth + 1, max, out);
+                match w.get_next_sibling(&cur) {
+                    Ok(next) => cur = next,
+                    Err(_) => break,
+                }
+            }
+        }
+    }
+    walk(&walker, &root, 0, max_depth, &mut out);
+    Ok(out)
 }
 
 #[cfg(test)]

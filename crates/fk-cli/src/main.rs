@@ -17,6 +17,7 @@ focuskitty — headless tracker (phase 1)
 
 USAGE:
     focuskitty probe              watch what the tracker sees, once a second
+    focuskitty uia [depth]        (Windows) dump the front window's a11y tree
     focuskitty tabs               list every open tab in every window
     focuskitty apps               list apps you could set a limit on
     focuskitty watch [--live]     run the timers. DRY RUN unless --live is passed
@@ -59,6 +60,15 @@ fn main() -> Result<()> {
 
     match cmd {
         "probe" => cmd_probe(),
+        // Windows only: print the accessibility tree of whatever is in front.
+        // "No URL" has several causes that look identical from outside; this
+        // is what tells them apart without another build cycle.
+        #[cfg(target_os = "windows")]
+        "uia" => {
+            let depth = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(8);
+            println!("{}", fk_probe_windows::dump_front_window(depth)?);
+            Ok(())
+        }
         "tabs" => cmd_tabs(),
         "apps" => cmd_apps(),
         "watch" => cmd_watch(args.iter().any(|a| a == "--live")),
