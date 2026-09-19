@@ -232,8 +232,20 @@ impl AppState {
     }
 
     pub fn snapshot(&self) -> Snapshot {
-        let tracker = self.tracker.lock().unwrap();
+        // ORDER MATTERS: `inner` before `tracker`, always, everywhere.
+        //
+        // The tick takes inner and then reaches for tracker while still
+        // holding it. This took them the other way round, and two threads
+        // taking the same two locks in opposite orders deadlock the moment
+        // they interleave.
+        //
+        // The thread that polls this once a second is the quick controls
+        // panel, which is why the clock stalled precisely when the panel was
+        // open -- and why it seemed to recover when it was closed. Nothing to
+        // do with idleness, browsers, or the event loop: two threads each
+        // holding what the other was waiting for.
         let inner = self.inner.lock().unwrap();
+        let tracker = self.tracker.lock().unwrap();
         let now = Local::now();
 
         let paused = inner.paused_until.is_some_and(|t| t > now);

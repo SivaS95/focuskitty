@@ -350,11 +350,24 @@ impl ActivityProbe for WinProbe {
     /// Minimise, never close. A limit should get something out of your sight,
     /// not throw away whatever was unsaved in it.
     fn hide_app(&self, app_name: &str) -> Result<CloseOutcome> {
-        let Some(hwnd) = window_of_app(app_name) else {
-            return Ok(CloseOutcome::NoLongerMatching);
-        };
-        let _ = unsafe { ShowWindow(hwnd, SW_MINIMIZE) };
-        Ok(CloseOutcome::Closed)
+        use windows::Win32::UI::WindowsAndMessaging::IsIconic;
+
+        // Only windows that are actually UP. Without this the cat walked over
+        // and minimised an already-minimised window, reported success, and was
+        // asked to do it again -- over and over at an app that was already
+        // out of the way.
+        let mut acted = false;
+        for hwnd in windows_of_app(app_name) {
+            if unsafe { IsIconic(hwnd) }.as_bool() {
+                continue;
+            }
+            let _ = unsafe { ShowWindow(hwnd, SW_MINIMIZE) };
+            acted = true;
+        }
+        if !acted {
+            tracing::info!("{app_name} is already out of the way; nothing to hide");
+        }
+        Ok(if acted { CloseOutcome::Closed } else { CloseOutcome::NoLongerMatching })
     }
 
     /// Locked, or on the secure desktop (UAC, Ctrl+Alt+Del).
@@ -487,6 +500,27 @@ extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> BOOL {
         }
     }
     TRUE
+}
+
+/// Every visible window belonging to an app.
+///
+/// Plural on purpose: File Explorer alone routinely has several, and hiding
+/// one of them leaves the app still in front of you.
+fn windows_of_app(app: &str) -> Vec<HWND> {
+    let want = app.trim().to_ascii_lowercase();
+    let want_exe = if want.ends_with(".exe") { want.clone() } else { format!("{want}.exe") };
+    visible_windows()
+        .into_iter()
+        .filter(|&hwnd| match pid_of(hwnd).and_then(exe_of) {
+            Some(exe) => {
+                let exe = exe.to_ascii_lowercase();
+                (exe == want_exe || exe == want
+                    || browser_name(&exe).is_some_and(|n| n.eq_ignore_ascii_case(app)))
+                    && !is_shell_window(&exe, hwnd)
+            }
+            None => false,
+        })
+        .collect()
 }
 
 /// The first visible window belonging to an app, matched on executable or
