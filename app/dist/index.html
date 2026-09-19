@@ -174,11 +174,18 @@ function ruleRow(r, onRemove) {
   name.textContent = r.label;
   const spacer = document.createElement("span");
   spacer.style.flex = "1";
+  // Today's count back to zero. The limit is a daily budget, so without this
+  // a site you have already used is stuck at "over" until midnight.
+  const reset = document.createElement("button");
+  reset.className = "ghost";
+  reset.textContent = "reset today";
+  reset.title = `${r.used_human} used today — start again from zero`;
+  reset.onclick = async () => { await invoke("reset_today", { label: r.label }); refresh(true); };
   const rm = document.createElement("button");
   rm.className = "ghost";
   rm.textContent = "stop watching";
   rm.onclick = async () => { await invoke("remove_rule", { label: r.label }); refresh(true); };
-  row.append(name, limitField(r.label, r.limit / 60), spacer, rm);
+  row.append(name, limitField(r.label, r.limit / 60), spacer, reset, rm);
   return row;
 }
 

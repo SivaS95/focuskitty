@@ -242,6 +242,45 @@ fn watch_current_app(state: State<'_, Arc<AppState>>, minutes: u64) -> Option<St
     Some(activity.app_name)
 }
 
+/// Put today's count for one target back to zero.
+///
+/// The limit is a DAILY budget, so a site you have already spent time on is
+/// over the moment you set a short limit on it -- correct, and baffling
+/// without a way back. There was none: the only escape was to pick a site you
+/// had not visited today, which is not how anyone uses this.
+///
+/// Deliberately explicit rather than a side effect of editing the limit.
+/// Nudging a limit must not be a way to buy more time; asking for a clean
+/// slate is a decision, and it says so.
+#[tauri::command]
+fn reset_today(state: State<'_, Arc<AppState>>, label: String) {
+    let mut tracker = state.tracker.lock().unwrap();
+    let keys: Vec<fk_core::rules::TargetKey> = tracker
+        .state
+        .keys()
+        .filter(|k| match k {
+            fk_core::rules::TargetKey::Site(d) => d.eq_ignore_ascii_case(&label),
+            fk_core::rules::TargetKey::App(id) => {
+                id.eq_ignore_ascii_case(&label)
+                    || tracker.config.apps.iter().any(|r| {
+                        r.app_id.eq_ignore_ascii_case(id)
+                            && r.app_name.eq_ignore_ascii_case(&label)
+                    })
+            }
+        })
+        .cloned()
+        .collect();
+    for k in &keys {
+        tracker.state.remove(k);
+    }
+    tracing::info!("reset today's count for {label:?} ({} entries)", keys.len());
+    drop(tracker);
+    // The cat should stop looking cross about something that is no longer over.
+    let mut inner = state.inner.lock().unwrap();
+    inner.last_expiry = None;
+    inner.closed_at.remove(&label);
+}
+
 #[tauri::command]
 fn remove_rule(state: State<'_, Arc<AppState>>, label: String) {
     let mut tracker = state.tracker.lock().unwrap();
@@ -545,14 +584,14 @@ pub fn run() {
     let builder = builder.invoke_handler(tauri::generate_handler![
         snapshot, set_click_through, begin_drag, cat_clicked, open_main,
         close_popover, pause, set_sleeping, snooze, watch_current,
-        remove_rule, add_site, list_apps, quit, set_hit_box, cat_do,
+        remove_rule, reset_today, add_site, list_apps, quit, set_hit_box, cat_do,
         set_cat_visible, cat_visible, debug_ping, set_limit, add_app, watch_current_app,
         usage_access, request_usage_access, overlay_allowed, request_overlay, set_overlay, overlay_running
     ]);
     #[cfg(mobile)]
     let builder = builder.invoke_handler(tauri::generate_handler![
         snapshot, pause, set_sleeping, snooze, watch_current,
-        remove_rule, add_site, list_apps, quit, cat_do,
+        remove_rule, reset_today, add_site, list_apps, quit, cat_do,
         debug_ping, set_limit, add_app, watch_current_app, usage_access, request_usage_access, overlay_allowed, request_overlay, set_overlay, overlay_running
     ]);
 
