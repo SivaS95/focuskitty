@@ -40,6 +40,46 @@ jobs:
       # showed up ten minutes later in the app build.
       - run: cargo check --workspace --all-targets
 
+  # A Windows machine with a real Chrome on it, which is the one thing this
+  # project does not otherwise have. Rather than asking a person to install a
+  # build, open a browser and describe what they see, ask the runner.
+  uia:
+    name: What can we read from Chrome?
+    runs-on: windows-latest
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p fk-cli --release
+
+      - name: Open Chrome on a real page
+        shell: pwsh
+        run: |
+          $chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+          if (-not (Test-Path $chrome)) { $chrome = "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" }
+          Write-Host "chrome: $chrome  exists: $(Test-Path $chrome)"
+          Start-Process $chrome -ArgumentList '--no-first-run','--no-default-browser-check','--new-window','https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+          Start-Sleep -Seconds 20
+
+      - name: What the accessibility tree offers
+        shell: pwsh
+        run: .\target\release\focuskitty.exe uia 12 chrome.exe
+
+      # And again with accessibility forced on, to find out whether that is
+      # the difference between a readable address and silence.
+      - name: Again, with renderer accessibility forced
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 3
+          $chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+          if (-not (Test-Path $chrome)) { $chrome = "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" }
+          Start-Process $chrome -ArgumentList '--no-first-run','--force-renderer-accessibility','--new-window','https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+          Start-Sleep -Seconds 20
+          .\target\release\focuskitty.exe uia 12 chrome.exe
+
   windows:
     name: Windows app
     runs-on: windows-latest

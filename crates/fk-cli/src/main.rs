@@ -17,7 +17,7 @@ focuskitty — headless tracker (phase 1)
 
 USAGE:
     focuskitty probe              watch what the tracker sees, once a second
-    focuskitty uia [depth]        (Windows) dump the front window's a11y tree
+    focuskitty uia [depth] [exe]  (Windows) dump a window's a11y tree
     focuskitty tabs               list every open tab in every window
     focuskitty apps               list apps you could set a limit on
     focuskitty watch [--live]     run the timers. DRY RUN unless --live is passed
@@ -66,6 +66,14 @@ fn main() -> Result<()> {
         #[cfg(target_os = "windows")]
         "uia" => {
             let depth = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(8);
+            // An executable name skips the countdown: there is a specific
+            // window to look at, so nothing needs bringing forward.
+            let exe = args.get(2).cloned();
+            if let Some(name) = exe.as_deref() {
+                let tree = fk_probe_windows::dump_window(depth, Some(name))?;
+                println!("{tree}");
+                return Ok(());
+            }
             // The dump is of whatever is IN FRONT -- which, run from a
             // terminal, is the terminal. Counting down first is the whole
             // difference between a dump of Chrome and a dump of PowerShell.

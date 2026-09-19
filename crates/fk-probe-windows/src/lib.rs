@@ -609,7 +609,19 @@ fn find_url(
 /// a browser yields nothing, this is what distinguishes "the tree is empty"
 /// from "the value is there and my test rejected it".
 pub fn dump_front_window(max_depth: usize) -> Result<String> {
-    let hwnd = unsafe { GetForegroundWindow() };
+    dump_window(max_depth, None)
+}
+
+/// The same, for a named executable rather than whatever is in front.
+///
+/// A machine with nobody sitting at it has no meaningful foreground window,
+/// so naming the process is the only way to diagnose a browser on a CI runner
+/// -- which is the one Windows machine always available.
+pub fn dump_window(max_depth: usize, exe: Option<&str>) -> Result<String> {
+    let hwnd = match exe {
+        Some(name) => window_of_app(name).ok_or_else(|| anyhow!("no visible window for {name}"))?,
+        None => unsafe { GetForegroundWindow() },
+    };
     if hwnd.is_invalid() {
         return Err(anyhow!("nothing is in front"));
     }
