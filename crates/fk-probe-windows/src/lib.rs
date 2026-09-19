@@ -154,17 +154,28 @@ impl WinProbe {
         found
     }
 
+    /// The URL showing in a browser window, read off its accessibility tree.
+    ///
+    /// Deliberately NOT a search for a particular control. The first version
+    /// looked for a Document element and then an address bar, which can only
+    /// work if a guess about how a given browser exposes itself is correct --
+    /// and when the guess is wrong the result is silence, indistinguishable
+    /// from a browser with no address at all. Chrome, Edge, Firefox and Brave
+    /// need not agree, and none of them owes us a stable tree.
+    ///
+    /// So: walk the window once and take the first value that LOOKS like a
+    /// URL, wherever it turns out to live. Whatever holds it -- the omnibox,
+    /// the document, something none of us has thought of -- it is found by
+    /// what it contains rather than by where it was expected to be.
+    ///
+    /// Bounded by depth and by a node budget, because this runs on the thread
+    /// that keeps time.
     fn read_url(&self, hwnd: HWND) -> Option<String> {
         self.with_ui(|ui| {
             let root = ui.element_from_handle(Handle::from(hwnd.0 as isize)).ok()?;
-
-            if let Some(u) = first_value(ui, &root, ControlType::Document) {
-                if looks_like_url(&u) {
-                    return Some(u);
-                }
-            }
-            let typed = first_value(ui, &root, ControlType::Edit)?;
-            looks_like_url(&typed).then_some(typed)
+            let walker = ui.get_control_view_walker().ok()?;
+            let mut budget = 500usize;
+            find_url(&walker, &root, 0, 10, &mut budget)
         })
     }
 
@@ -470,9 +481,37 @@ fn send_ctrl_w() -> Result<()> {
 
 // --- URL helpers ------------------------------------------------------------
 
+/// Is this string a web address?
+///
+/// Strict on purpose. The URL is now found by scanning every value in the
+/// window rather than by looking in a known place, so this predicate is the
+/// only thing standing between "the address" and any other dotted string that
+/// happens to be lying around -- a version number, a file size, a timestamp.
+/// A false positive here would be charged to a site the user never visited.
 fn looks_like_url(s: &str) -> bool {
     let s = s.trim();
-    !s.is_empty() && (s.contains("://") || s.contains('.')) && !s.contains(' ')
+    if s.is_empty() || s.contains(char::is_whitespace) || s.len() < 4 {
+        return false;
+    }
+    let after_scheme = s.split_once("://").map(|(_, r)| r).unwrap_or(s);
+    // Only a real scheme may carry one; "1.2.3:4" is not an address.
+    if s.contains("://") && !s.starts_with("http") && !s.starts_with("file") {
+        return false;
+    }
+    let host = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('.');
+    let Some((name, tld)) = host.rsplit_once('.') else {
+        return false;
+    };
+    // A host has something before the dot, and a top-level domain is at least
+    // two letters -- which is what rules out "1.0" and "3.14".
+    !name.is_empty()
+        && tld.len() >= 2
+        && tld.chars().all(|c| c.is_ascii_alphabetic())
+        && name.chars().any(|c| c.is_ascii_alphanumeric())
 }
 
 /// Is this the same page, allowing for the browser's own tidying?
@@ -491,84 +530,42 @@ fn same_page(a: &str, b: &str) -> bool {
     key(a) == key(b)
 }
 
-/// The first value found under `root` for a given control type.
-fn first_value(ui: &UIAutomation, root: &UIElement, kind: ControlType) -> Option<String> {
-    // Ten levels: deep enough to reach a Chromium document, shallow enough to
-    // stay bounded. Every level multiplies the number of COM calls, and at
-    // sixteen a fruitless search took seconds rather than milliseconds -- long
-    // enough to stall the tick that charges the time.
-    let el = ui
-        .create_matcher()
-        .from_ref(root)
-        .control_type(kind)
-        .depth(10)
-        .timeout(150)
-        .find_first()
-        .ok()?;
-    let v = el.get_pattern::<UIValuePattern>().ok()?.get_value().ok()?;
-    let v = v.trim().to_string();
-    (!v.is_empty()).then_some(v)
-}
-
-/// Print the accessibility tree of whatever is in front, for diagnosis.
+/// Depth-first hunt for something URL-shaped, anywhere under `el`.
 ///
-/// Reading a URL out of a browser on Windows is a guess until it runs on a
-/// real machine with a real browser, and "no URL" has several possible causes
-/// that look identical from the outside: the element is deeper than the search
-/// went, the browser has not built its accessibility tree yet, or the value is
-/// on a pattern we are not asking for. One dump distinguishes them, and saves
-/// a round of guessing per attempt.
-pub fn dump_front_window(max_depth: usize) -> Result<String> {
-    let hwnd = unsafe { GetForegroundWindow() };
-    if hwnd.is_invalid() {
-        return Err(anyhow!("nothing is in front"));
+/// Returns the first match. The address bar generally comes before the
+/// document in tree order, and either describes the same page, so first is as
+/// good as any -- and far cheaper than collecting them all.
+fn find_url(
+    walker: &uiautomation::UITreeWalker,
+    el: &UIElement,
+    depth: usize,
+    max_depth: usize,
+    budget: &mut usize,
+) -> Option<String> {
+    if depth > max_depth || *budget == 0 {
+        return None;
     }
-    let exe = pid_of(hwnd).and_then(exe_of).unwrap_or_default();
-    let ui = UIAutomation::new().map_err(|e| anyhow!("no UI Automation: {e}"))?;
-    let root = ui
-        .element_from_handle(Handle::from(hwnd.0 as isize))
-        .map_err(|e| anyhow!("element_from_handle failed: {e}"))?;
-    let walker = ui.get_control_view_walker().map_err(|e| anyhow!("{e}"))?;
+    *budget -= 1;
 
-    let mut out = format!("front: {exe}  title: {:?}\n", window_title(hwnd));
-    fn walk(
-        w: &uiautomation::UITreeWalker,
-        el: &UIElement,
-        depth: usize,
-        max: usize,
-        out: &mut String,
-    ) {
-        if depth > max {
-            return;
-        }
-        let kind = el.get_control_type().map(|c| format!("{c:?}")).unwrap_or_default();
-        let name = el.get_name().unwrap_or_default();
-        let value = el
-            .get_pattern::<UIValuePattern>()
-            .ok()
-            .and_then(|p| p.get_value().ok())
-            .unwrap_or_default();
-        let name = if name.len() > 60 { format!("{}...", &name[..60]) } else { name };
-        let value = if value.len() > 90 { format!("{}...", &value[..90]) } else { value };
-        out.push_str(&format!(
-            "{:indent$}{kind} name={name:?}{}\n",
-            "",
-            if value.is_empty() { String::new() } else { format!(" VALUE={value:?}") },
-            indent = depth * 2
-        ));
-        if let Ok(child) = w.get_first_child(el) {
-            let mut cur = child;
-            for _ in 0..40 {
-                walk(w, &cur, depth + 1, max, out);
-                match w.get_next_sibling(&cur) {
-                    Ok(next) => cur = next,
-                    Err(_) => break,
-                }
+    if let Ok(p) = el.get_pattern::<UIValuePattern>() {
+        if let Ok(v) = p.get_value() {
+            let v = v.trim();
+            if looks_like_url(v) {
+                return Some(v.to_string());
             }
         }
     }
-    walk(&walker, &root, 0, max_depth, &mut out);
-    Ok(out)
+
+    let mut child = walker.get_first_child(el).ok()?;
+    loop {
+        if let Some(found) = find_url(walker, &child, depth + 1, max_depth, budget) {
+            return Some(found);
+        }
+        match walker.get_next_sibling(&child) {
+            Ok(next) => child = next,
+            Err(_) => return None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -584,11 +581,25 @@ mod tests {
     }
 
     #[test]
-    fn typed_searches_are_not_urls() {
+    fn recognises_addresses_and_rejects_everything_else() {
         assert!(looks_like_url("https://youtube.com"));
-        assert!(looks_like_url("youtube.com/watch"));
+        assert!(looks_like_url("youtube.com/watch?v=x"));
+        assert!(looks_like_url("www.bbc.co.uk"));
+        assert!(looks_like_url("http://localhost.dev/x"));
+
+        // Typed searches.
         assert!(!looks_like_url("how to focus"));
         assert!(!looks_like_url(""));
+
+        // The reason this predicate has to be strict: the URL is found by
+        // scanning every value in the window, so any dotted string in the
+        // tree is a candidate. None of these may pass.
+        assert!(!looks_like_url("1.0"));
+        assert!(!looks_like_url("3.14159"));
+        assert!(!looks_like_url("v2.1.4"));
+        assert!(!looks_like_url("12.5"));
+        assert!(!looks_like_url("file.7z"));
+        assert!(!looks_like_url("mailto://someone.com"));
     }
 
     #[test]
