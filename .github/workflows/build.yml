@@ -159,6 +159,61 @@ jobs:
         run: |
           npm ci
           npx tauri build
+
+      # THE APP, not the command-line tool.
+      #
+      # Every check so far ran `focuskitty.exe watch`, which has no windows --
+      # and every stall reported has come from the parts that do. Six fixes
+      # went out against a clock that stops, each argued from symptoms relayed
+      # off a machine nobody could inspect, because nothing here had ever run
+      # the real thing.
+      - name: Does the APP's clock run, untouched?
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = "app\src-tauri\target\release\focuskitty.exe"
+          $data = "$env:APPDATA\FocusKitty"
+          Remove-Item "$data\diary" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "$data\focuskitty.log" -Force -ErrorAction SilentlyContinue
+
+          $chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+          if (-not (Test-Path $chrome)) { $chrome = "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" }
+          Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          Start-Process $chrome -ArgumentList '--no-first-run','--hide-crash-restore-bubble','--new-window','https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+          Start-Sleep -Seconds 12
+
+          # The rule goes in through the CLI, which shares the same config.
+          .\target\release\focuskitty.exe add youtube.com 60 --mode foreground-only
+
+          Write-Host "--- starting the app, then NOT touching it for 95 seconds"
+          $app = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 95
+          Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+
+          Write-Host "--- the app's own log"
+          if (Test-Path "$data\focuskitty.log") { Get-Content "$data\focuskitty.log" -Tail 40 }
+          else { Write-Host "(no log written)" }
+
+          $day = Get-Date -Format 'yyyy-MM-dd'
+          $log = "$data\diary\$day.json"
+          if (-not (Test-Path $log)) { throw "the app tracked nothing at all in 95 seconds" }
+          $raw = Get-Content $log -Raw
+          $used = [int]([regex]::Match($raw, '"used_ms"\s*:\s*(\d+)')).Groups[1].Value
+          Write-Host "used_ms = $used"
+          if ($used -lt 45000) {
+            throw "the APP's clock barely moved: ${used}ms over 95 seconds untouched"
+          }
+          Write-Host "PASS: the app charged ${used}ms over 95 seconds with nobody touching it"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: focuskitty-app-log
+          path: ${{ env.APPDATA }}\FocusKitty\focuskitty.log
+          if-no-files-found: ignore
+
       - uses: actions/upload-artifact@v4
         with:
           name: focuskitty-windows

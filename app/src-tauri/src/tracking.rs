@@ -15,6 +15,14 @@ use serde::Serialize;
 /// rows, bubbles, the diary — should say `Calendar`. Mixing the two is what
 /// stopped app limits working at all: the expiry looked up a rule by matching
 /// the bundle id against `app_name`, found nothing, and silently gave up.
+/// A short name for a key, for the log.
+fn k_label(k: &fk_core::rules::TargetKey) -> String {
+    match k {
+        fk_core::rules::TargetKey::Site(d) => d.clone(),
+        fk_core::rules::TargetKey::App(a) => a.clone(),
+    }
+}
+
 fn display_label(tracker: &Tracker, key: &TargetKey) -> String {
     match key {
         TargetKey::Site(d) => d.clone(),
@@ -621,6 +629,36 @@ pub fn tick(state: &AppState, probe: &dyn ActivityProbe) {
                 }
             }
         }
+    }
+
+    // A heartbeat, every five seconds.
+    //
+    // Six fixes have gone out for a clock that stops, each argued from what
+    // somebody saw on a machine nobody could inspect. This is the record that
+    // ends that: when it ran, how long since the last one, what was in front,
+    // and what the thing being watched has been charged. A gap in these
+    // timestamps IS the bug, and it names itself.
+    if inner.tick_count % 5 == 0 {
+        let front = inner.current_label.clone().unwrap_or_else(|| "(nothing)".into());
+        let charged = {
+            let tracker = state.tracker.lock().unwrap();
+            tracker
+                .config
+                .sites
+                .iter()
+                .map(|r| fk_core::rules::TargetKey::site(&r.domain))
+                .chain(
+                    tracker
+                        .config
+                        .apps
+                        .iter()
+                        .map(|r| fk_core::rules::TargetKey::app(&r.app_id)),
+                )
+                .map(|k| format!("{}={}s", k_label(&k), tracker.used(&k)))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        tracing::info!("tick {} front={front:?} {charged}", inner.tick_count);
     }
 
     // Log every CHANGE in what is detected, so a tab switch that fails to
