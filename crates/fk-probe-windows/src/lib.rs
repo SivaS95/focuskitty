@@ -342,8 +342,17 @@ impl ActivityProbe for WinProbe {
         Some(TabRect { index, count, ..r })
     }
 
+    /// Where an app's window is -- and `None` when it has none worth acting on.
+    ///
+    /// Minimised windows do not count. This is what the caller uses to decide
+    /// whether there is anything to walk over to, so counting a window that is
+    /// already down means the cat performs the whole business of closing
+    /// something that was already closed.
     fn app_window_rect(&self, app_name: &str) -> Option<TabRect> {
-        let hwnd = window_of_app(app_name)?;
+        use windows::Win32::UI::WindowsAndMessaging::IsIconic;
+        let hwnd = windows_of_app(app_name)
+            .into_iter()
+            .find(|&h| !unsafe { IsIconic(h) }.as_bool())?;
         window_rect(hwnd)
     }
 

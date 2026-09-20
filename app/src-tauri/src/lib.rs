@@ -1138,8 +1138,31 @@ fn spawn_tick(app: AppHandle, state: Arc<AppState>) {
                         with_probe(|p| p.app_window_rect(&n)).flatten()
                     }
                 };
-                let _ = app2.emit("fk://busy", true);
-                go_and_swipe(app2.clone(), state.clone(), job, rect);
+                // Is there anything to act on? Asked BEFORE the performance,
+                // not after it.
+                //
+                // Enforcement repeats every fifteen seconds while something
+                // over its limit is still in front, which is right -- but the
+                // cat was walking across the screen and swiping at a tab that
+                // had already gone, or an app already minimised, and only then
+                // finding nothing to do. From the outside that is a cat in a
+                // loop attacking an empty space.
+                let worth_it = match &job {
+                    tracking::PendingClose::Tab(_, want) => with_probe(|p| p.current())
+                        .flatten()
+                        .and_then(|a| a.tab)
+                        .is_some_and(|t| {
+                            let d = fk_core::domain::normalize(&want.url);
+                            !d.is_empty() && fk_core::domain::matches_domain(&t.url, &d)
+                        }),
+                    tracking::PendingClose::App(..) => rect.is_some(),
+                };
+                if !worth_it {
+                    tracing::info!("nothing left to close; the cat stays put");
+                } else {
+                    let _ = app2.emit("fk://busy", true);
+                    go_and_swipe(app2.clone(), state.clone(), job, rect);
+                }
             }
 
             // Handed to the main thread rather than sent from here. Emitting

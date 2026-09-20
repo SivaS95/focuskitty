@@ -406,12 +406,21 @@ pub fn tick(state: &AppState, probe: &dyn ActivityProbe) {
 
     // Opening our own controls must not pause your timer.
     //
-    // The popover takes focus, so Chrome stops being frontmost and the clock
-    // would stop -- meaning a video kept playing while the tracker looked away.
-    // While FocusKitty is in front we keep charging whatever was in front
-    // before it, bounded so that leaving the panel open forever does not bill
-    // you for a video you stopped watching.
-    const SELF_GRACE_TICKS: u64 = 120;
+    // The popover takes focus, so the browser stops being frontmost and the
+    // clock would stop -- a video playing on while the tracker looked away.
+    // So while FocusKitty is in front we go on charging whatever was in front
+    // before it.
+    //
+    // This was bounded at two minutes, which was far too short. The quick
+    // controls are a small panel over the thing you are actually using, and
+    // people leave them open to watch the countdown -- which is the one moment
+    // the countdown must not stop. After two minutes it did, and the timer sat
+    // there until something else took focus and woke it. That is the "stuck at
+    // two seconds until I click something" this has been chasing all day.
+    //
+    // Fifteen minutes instead. Sitting in FocusKitty's own window that long
+    // genuinely is not watching YouTube; a panel open for three minutes is.
+    const SELF_GRACE_TICKS: u64 = 900;
     #[allow(unused_assignments)]
     let mut carried = None;
     let counted = {
@@ -666,6 +675,11 @@ pub fn tick(state: &AppState, probe: &dyn ActivityProbe) {
     // timestamps IS the bug, and it names itself.
     if inner.tick_count % 5 == 0 {
         let front = inner.current_label.clone().unwrap_or_else(|| "(nothing)".into());
+        let carried_for = if inner.self_front > 0 {
+            format!(" (FocusKitty in front for {}s)", inner.self_front)
+        } else {
+            String::new()
+        };
         let charged = {
             let tracker = state.tracker.lock().unwrap();
             tracker
@@ -684,7 +698,7 @@ pub fn tick(state: &AppState, probe: &dyn ActivityProbe) {
                 .collect::<Vec<_>>()
                 .join(" ")
         };
-        tracing::info!("tick {} front={front:?} {charged}", inner.tick_count);
+        tracing::info!("tick {} front={front:?}{carried_for} {charged}", inner.tick_count);
     }
 
     // Log every CHANGE in what is detected, so a tab switch that fails to
