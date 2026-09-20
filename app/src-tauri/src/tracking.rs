@@ -416,6 +416,32 @@ pub fn tick(state: &AppState, probe: &dyn ActivityProbe) {
     let mut carried = None;
     let counted = {
         let mut inner = state.inner.lock().unwrap();
+
+        // Paused means PAUSED. The clock stops.
+        //
+        // It used to keep counting and only hold back the closing, on the
+        // reasoning that the diary should stay honest about the hour you
+        // spent. That is a defensible idea and it is not what the button
+        // says: "pause" that goes on spending your budget is a button with
+        // no meaning. If the day's record suffers for it, the record is the
+        // thing to change, not what the word does.
+        if inner.paused_until.is_some_and(|t| t > now) {
+            // Still remember what you were doing, so "watch this" and the
+            // countdown have something to point at when you come back.
+            if current.is_some() {
+                inner.last_counted = current.clone();
+            }
+            inner.current_label = None;
+            inner.warning = false;
+            drop(inner);
+            // Tick the tracker with nothing in front. That charges no time and
+            // moves its clock forward, so the paused stretch is not waiting to
+            // be charged in one lump the moment you resume.
+            let mut tracker = state.tracker.lock().unwrap();
+            tracker.tick(now, None, &[]);
+            return;
+        }
+
         let is_self = current
             .as_ref()
             .is_some_and(|a| a.app_id.eq_ignore_ascii_case(SELF_BUNDLE));
