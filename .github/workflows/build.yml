@@ -180,14 +180,19 @@ jobs:
           if (-not (Test-Path $chrome)) { $chrome = "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" }
           Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 2
-          Start-Process $chrome -ArgumentList '--no-first-run','--hide-crash-restore-bubble','--new-window','https://www.youtube.com/watch?v=dQw4w9WgXcQ'
-          Start-Sleep -Seconds 12
 
           # The rule goes in through the CLI, which shares the same config.
           .\target\release\focuskitty.exe add youtube.com 60 --mode foreground-only
 
-          Write-Host "--- starting the app, then NOT touching it for 95 seconds"
+          # The app FIRST, then the browser. Started the other way round, the
+          # app's own window is left frontmost with nobody there to click
+          # away from it -- and "FocusKitty is in front" is correctly counted
+          # as nothing being watched.
+          Write-Host "--- starting the app"
           $app = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 8
+          Start-Process $chrome -ArgumentList '--no-first-run','--hide-crash-restore-bubble','--new-window','https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+          Write-Host "--- Chrome is in front. NOT touching anything for 95 seconds"
           Start-Sleep -Seconds 95
           Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
           Start-Sleep -Seconds 2
