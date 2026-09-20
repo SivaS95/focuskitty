@@ -145,6 +145,49 @@ fn expiry_targets_the_tab_that_was_actually_in_front() {
     }
 }
 
+/// An app limit of two minutes must reach two minutes.
+///
+/// From a real log: the count climbed 1, 6, 11 ... 116, then 118, then stopped
+/// dead with no expiry recorded. Two short of the limit, and the interface
+/// read "2 seconds left" forever. This pins the arithmetic the log could not.
+#[test]
+fn an_app_limit_runs_all_the_way_to_the_limit() {
+    let mut c = Config::starter();
+    c.sites.clear();
+    c.apps = vec![AppRule {
+        app_id: "explorer.exe".into(),
+        app_name: "File Explorer".into(),
+        daily_limit_secs: 120,
+        session_limit_secs: None,
+        warn_lead_secs: 300,
+        enabled: true,
+    }];
+    let mut tr = Tracker::new(c, t0());
+    let key = TargetKey::app("explorer.exe");
+    let act = Activity {
+        app_id: "explorer.exe".into(),
+        app_name: "Downloads - File Explorer".into(),
+        tab: None,
+    };
+
+    let mut expired_at = None;
+    for i in 0..150 {
+        for a in tr.tick(t0() + Duration::seconds(i), Some(&act), &[]) {
+            if matches!(a, Action::Expire { .. }) && expired_at.is_none() {
+                expired_at = Some(tr.used(&key));
+            }
+        }
+    }
+
+    assert_eq!(
+        expired_at,
+        Some(120),
+        "it must run out AT the limit, not short of it; used was {}s",
+        tr.used(&key)
+    );
+    assert_eq!(tr.remaining(&key), Some(0), "nothing should be left");
+}
+
 /// A limit that has run out must keep being enforced.
 ///
 /// Reported from both platforms: the tab closed once, and after that opening

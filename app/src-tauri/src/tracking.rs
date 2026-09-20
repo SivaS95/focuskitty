@@ -15,6 +15,25 @@ use serde::Serialize;
 /// rows, bubbles, the diary — should say `Calendar`. Mixing the two is what
 /// stopped app limits working at all: the expiry looked up a rule by matching
 /// the bundle id against `app_name`, found nothing, and silently gave up.
+/// The limit a key is measured against, in seconds. 0 when it has no rule.
+fn limit_of(tracker: &fk_core::tracker::Tracker, k: &fk_core::rules::TargetKey) -> u64 {
+    match k {
+        fk_core::rules::TargetKey::Site(d) => tracker
+            .config
+            .sites
+            .iter()
+            .find(|r| fk_core::domain::canonical(&r.domain) == *d)
+            .map(|r| r.daily_limit_secs),
+        fk_core::rules::TargetKey::App(a) => tracker
+            .config
+            .apps
+            .iter()
+            .find(|r| r.app_id.eq_ignore_ascii_case(a))
+            .map(|r| r.daily_limit_secs),
+    }
+    .unwrap_or(0)
+}
+
 /// A short name for a key, for the log.
 fn k_label(k: &fk_core::rules::TargetKey) -> String {
     match k {
@@ -694,7 +713,21 @@ pub fn tick(state: &AppState, probe: &dyn ActivityProbe) {
                         .iter()
                         .map(|r| fk_core::rules::TargetKey::app(&r.app_id)),
                 )
-                .map(|k| format!("{}={}s", k_label(&k), tracker.used(&k)))
+                .map(|k| {
+                    // used, the limit it is measured against, whether the
+                    // tracker considers it spent, and what it thinks is left.
+                    // The last log showed a count stopping at 118s with no
+                    // expiry logged, which none of these four alone explains.
+                    let st = tracker.state.get(&k);
+                    format!(
+                        "{}={}s/{}s expired={} left={}s",
+                        k_label(&k),
+                        tracker.used(&k),
+                        limit_of(&tracker, &k),
+                        st.map(|s| s.expired).unwrap_or(false),
+                        tracker.remaining(&k).map(|r| r as i64).unwrap_or(-1),
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(" ")
         };
