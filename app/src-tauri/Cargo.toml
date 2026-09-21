@@ -1,6 +1,6 @@
 [package]
 name = "focuskitty"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 # Its own workspace: a Tauri app pulls a very different dependency tree from the
