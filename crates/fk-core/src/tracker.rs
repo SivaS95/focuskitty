@@ -219,6 +219,35 @@ impl Tracker {
         let mut actions = Vec::new();
         let mut charged: BTreeSet<TargetKey> = BTreeSet::new();
 
+        // --- a spent limit comes back once you have actually left -----------
+        //
+        // The budget is per SITTING, not per day. Five minutes of Instagram
+        // meant five minutes until midnight, so the first time it fired the
+        // app was gone for the rest of the day -- which is not what a limit
+        // is for. You are meant to get it back later, in the evening, on the
+        // next sitting.
+        //
+        // The condition is "expired AND not in front". It cannot fire while
+        // the close is still landing, because until the app is actually gone
+        // it is still the foreground; and it cannot reset something that was
+        // never over.
+        let finished: Vec<TargetKey> = self
+            .state
+            .iter()
+            .filter(|(k, st)| st.expired && Some(*k) != foreground.as_ref())
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in finished {
+            if let Some(st) = self.state.get_mut(&key) {
+                st.used_ms = 0;
+                st.session_ms = 0;
+                st.grace_ms = 0;
+                st.expired = false;
+                st.expired_at_ms = None;
+                st.warned.clear();
+            }
+        }
+
         // --- a limit that is no longer spent is no longer spent --------------
         //
         // `expired` latches on purpose: once the budget is gone the clock

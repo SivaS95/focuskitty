@@ -198,6 +198,37 @@ class CatOverlayService : Service() {
         wm.updateViewLayout(wv, params)
     }
 
+    private var strollAnim: android.animation.ValueAnimator? = null
+
+    /**
+     * Carry the cat a short way along its edge.
+     *
+     * The rig walks on the spot -- it has a `driven` flag for exactly this --
+     * and the window does the travelling, which is the only way a cat in an
+     * overlay can cross the screen at all. Clamped to the screen with the
+     * same margin snapToEdge uses, and `catX` is kept in step so speaking
+     * still returns the cat to where it actually is.
+     */
+    private fun stroll(dx: Int, ms: Long) {
+        val wv = web ?: return
+        if (expanded || bubbling) return
+        val screenW = resources.displayMetrics.widthPixels
+        val from = params.x
+        val to = (from + dx).coerceIn(dp(12), maxOf(dp(12), screenW - catPx - dp(12)))
+        if (to == from) return
+        strollAnim?.cancel()
+        strollAnim = android.animation.ValueAnimator.ofInt(from, to).apply {
+            duration = ms
+            addUpdateListener { v ->
+                if (expanded || bubbling) { cancel(); return@addUpdateListener }
+                params.x = v.animatedValue as Int
+                catX = params.x
+                runCatching { wm.updateViewLayout(wv, params) }
+            }
+            start()
+        }
+    }
+
     /**
      * Make room above the cat for one line, without moving the cat.
      *
@@ -328,6 +359,12 @@ class CatOverlayService : Service() {
         @android.webkit.JavascriptInterface
         fun bubble(on: Boolean) {
             web?.post { setBubble(on) }
+        }
+
+        /** Walk the cat dx pixels along its edge, over ms milliseconds. */
+        @android.webkit.JavascriptInterface
+        fun stroll(dx: Int, ms: Int) {
+            web?.post { stroll(dx, ms.toLong()) }
         }
 
         /** Drop a rule. The tracker removes it and the day's total together. */

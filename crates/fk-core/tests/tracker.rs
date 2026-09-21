@@ -194,6 +194,61 @@ fn an_app_limit_runs_all_the_way_to_the_limit() {
 /// the site again cost nothing -- "it says over, over, over. It doesn't do
 /// anything." Closing a tab means nothing if reopening it is free.
 #[test]
+fn a_spent_limit_comes_back_once_you_have_actually_left() {
+    // The budget is per sitting. Five minutes of Instagram should not mean
+    // five minutes until midnight -- you are meant to get it back on the next
+    // sitting, in the evening, after a gap.
+    let mut c = Config::starter();
+    c.sites.clear();
+    c.apps.push(AppRule {
+        app_id: "com.instagram.android".into(),
+        app_name: "Instagram".into(),
+        daily_limit_secs: 60,
+        session_limit_secs: None,
+        warn_lead_secs: 300,
+        enabled: true,
+    });
+    let mut tr = Tracker::new(c, t0());
+    let insta = Activity {
+        app_id: "com.instagram.android".into(),
+        app_name: "Instagram".into(),
+        tab: None,
+    };
+
+    let mut fired = 0;
+    for i in 0..65 {
+        for a in tr.tick(t0() + Duration::seconds(i), Some(&insta), &[]) {
+            if matches!(a, Action::Expire { .. }) {
+                fired += 1;
+            }
+        }
+    }
+    assert_eq!(fired, 1, "the limit should have been spent and acted on");
+
+    // The app is gone: something else is in front now.
+    let other = Activity {
+        app_id: "com.android.launcher".into(),
+        app_name: "Home".into(),
+        tab: None,
+    };
+    tr.tick(t0() + Duration::seconds(66), Some(&other), &[]);
+
+    let key = TargetKey::app("com.instagram.android");
+    assert_eq!(tr.used(&key), 0, "leaving must put the count back to zero");
+
+    // And it can be spent again, in full, on the next sitting.
+    let mut again = 0;
+    for i in 67..135 {
+        for a in tr.tick(t0() + Duration::seconds(i), Some(&insta), &[]) {
+            if matches!(a, Action::Expire { .. }) {
+                again += 1;
+            }
+        }
+    }
+    assert_eq!(again, 1, "the next sitting gets the whole budget again");
+}
+
+#[test]
 fn a_spent_limit_is_enforced_again_when_you_come_back() {
     let c = cfg(vec![site("github.com", 60, BackgroundMode::ForegroundOnly)]);
     let mut tr = Tracker::new(c, t0());

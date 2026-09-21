@@ -175,7 +175,7 @@ function render() {
     bar.style.width = (row.limit ? Math.min(100, row.used / row.limit * 100) : 0) + "%";
     bar.classList.toggle("over", !!over);
     document.getElementById("statSub").textContent =
-      `${row.used_human} of ${row.limit_human} today`;
+      `${row.used_human} of ${row.limit_human} this sitting`;
     // The stepper now edits the live limit.
     minsIdx = nearestIdx(Math.round(row.limit / 60));
     document.getElementById("mins").textContent = MINS[minsIdx] + "m";
@@ -273,6 +273,8 @@ setInterval(() => {
 
   if (snap.pose && snap.pose !== shownPose) {
     shownPose = snap.pose;
+    // Whatever it was up to, the tracker outranks it.
+    if (acting) { clearTimeout(actTimer); acting = false; cat.driven = false; }
     cat.setPose(snap.pose);
     // A limit running out is the one moment the cat is not a decoration:
     // it takes a swing, the same as it does at a tab on the desktop.
@@ -295,6 +297,78 @@ setInterval(() => {
   }
 }, 1000);
 let asleep = false;
+
+/* A life of its own.
+ *
+ * The phone cat only ever sat. Every pose the desktop one uses ships in this
+ * same rig -- eat, read, sleep, bored, walk -- and none of them were ever
+ * asked for. So: while nothing is happening, it does something.
+ *
+ * Nothing fires unless the cat is genuinely idle: not while the tools are
+ * open, not while it is speaking, not while the tracker is warning or angry,
+ * not while you are dragging it, and not while you have told it to sleep.
+ * A cat that wanders off mid-warning is worse than one that sits.
+ *
+ * Walking is the odd one out: an overlay cannot travel by itself, so the rig
+ * walks on the spot (`driven`) and the service carries the window. */
+const IDLE_ACTS = [
+  { pose: "eat",   ms: 11000, weight: 3 },
+  { pose: "read",  ms: 17000, weight: 3 },
+  { pose: "bored", ms:  7000, weight: 2 },
+  { pose: "sleep", ms: 24000, weight: 2 },
+  { walk: true,    ms:  5200, weight: 4 },
+];
+
+let acting = false;
+let actTimer = 0;
+
+function idleOk() {
+  return !acting && !asleep
+    && shownPose === "sit"
+    && !document.body.classList.contains("open")
+    && !document.body.classList.contains("saying");
+}
+
+function pickAct() {
+  const total = IDLE_ACTS.reduce((n, a) => n + a.weight, 0);
+  let r = Math.random() * total;
+  for (const a of IDLE_ACTS) { r -= a.weight; if (r <= 0) return a; }
+  return IDLE_ACTS[0];
+}
+
+function endAct() {
+  acting = false;
+  cat.driven = false;
+  if (shownPose === "sit" && !asleep) cat.setPose("sit");
+}
+
+function doAct() {
+  if (!idleOk()) return;
+  const a = pickAct();
+  acting = true;
+  if (a.walk) {
+    // Toward the middle if parked at an edge, so it never walks into a wall
+    // and stands there pushing.
+    const dir = Math.random() < 0.5 ? -1 : 1;
+    const px = Math.round((90 + Math.random() * 120) * dir);
+    if (cat.dir !== dir) cat.turnAround?.();
+    cat.driven = true;
+    cat.setPose("walk");
+    FKB?.stroll?.(px, a.ms);
+  } else {
+    cat.setPose(a.pose);
+  }
+  clearTimeout(actTimer);
+  actTimer = setTimeout(endAct, a.ms);
+}
+
+/* Irregular on purpose. Something that happens exactly every thirty seconds
+   reads as a screensaver, not an animal. */
+(function schedule() {
+  const wait = 16000 + Math.random() * 26000;
+  setTimeout(() => { doAct(); schedule(); }, wait);
+})();
+
 document.getElementById("sleep").onclick = (e) => {
   asleep = !asleep;
   cat.setPose(asleep ? "sleep" : "sit");

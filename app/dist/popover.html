@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>FocusKitty</title>
 <style>
   :root { color-scheme: dark; }
@@ -193,7 +194,7 @@ function renderRows(rows) {
         <div class="sub"><span class="st"></span>
           <span class="used"></span>
           <input class="lim" type="number" min="1" max="1440"
-                 title="minutes a day — Enter to save"><span class="unit">m</span></span></div>`;
+                 title="minutes per sitting — Enter to save"><span class="unit">m</span></span></div>`;
       const lim = el.querySelector(".lim");
       const save = async () => {
         const v = Number(lim.value) || 1;
